@@ -1,5 +1,10 @@
 [
   {
+    "name": "TierTicker",
+    "path": "apps/tiere/index.html",
+    "icon": "🐾"
+  },
+  {
     "name": "Kanban & Eisenhower",
     "path": "apps/kanban/index.html",
     "icon": "✅"

@@ -298,6 +298,27 @@ button {
     max-height: 90vh;
     object-fit: contain;
 }
+
+/* === SHARE CHOICE MODAL === */
+.share-choice-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.8); z-index: 10000;
+    display: flex; align-items: center; justify-content: center;
+    animation: fadeIn 0.2s;
+}
+.share-box {
+    background: var(--card); border: 1px solid #444;
+    padding: 20px; border-radius: 16px; text-align: center;
+    width: 300px; box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+}
+.share-opt-btn {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; padding: 15px; margin-bottom: 10px;
+    background: var(--btn); color: white; border-radius: 12px;
+    font-weight: bold; border: 1px solid transparent;
+}
+.share-opt-btn:active { background: var(--accent); color: black; }
+   
 </style>
 </head>
 <body>
@@ -863,28 +884,81 @@ function closeMenu() {
     document.querySelectorAll('.context-menu').forEach(el => el.remove());
 }
 
-// Die Share-Magie
-async function shareMeme(id) {
-    const m = memes.find(x => x.id === id);
-    if(!m) return;
+/* =========================================
+   SHARE ENGINE V2 (LINK vs. FILE)
+   ========================================= */
 
-    // Fall 1: Es ist eine URL -> Link teilen
-    if (m.source === 'url') {
+// 1. Hauptfunktion (Ersetzt die alte shareMeme)
+function shareMeme(id) {
+    const m = memes.find(x => x.id === id);
+    if (!m) return;
+
+    // Wenn lokal: Sofort Bild teilen (Keine Wahl nötig)
+    if (m.source === 'local') {
+        shareLocalFile(m);
+    } 
+    // Wenn URL: Auswahl anzeigen
+    else if (m.source === 'url') {
+        showShareChoice(m);
+    }
+}
+
+// 2. Das Auswahl-Popup bauen
+function showShareChoice(m) {
+    // Falls schon offen, weg damit
+    const old = document.getElementById('shareOverlay');
+    if(old) old.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'shareOverlay';
+    overlay.className = 'share-choice-overlay';
+    
+    overlay.innerHTML = `
+        <div class="share-box">
+            <h3 style="margin-bottom:20px;">Teilen als...</h3>
+            
+            <div class="share-opt-btn" onclick="executeShare('${m.id}', 'link')">
+                <span>🔗</span> Link senden
+            </div>
+            
+            <div class="share-opt-btn" onclick="executeShare('${m.id}', 'file')">
+                <span>🖼️</span> Bild/Datei senden
+            </div>
+
+            <div style="margin-top:15px; font-size:12px; opacity:0.5; text-decoration:underline; cursor:pointer;" 
+                 onclick="document.getElementById('shareOverlay').remove()">
+                 Abbrechen
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+}
+
+// 3. Ausführung der Wahl
+async function executeShare(id, type) {
+    document.getElementById('shareOverlay').remove(); // Popup schließen
+    const m = memes.find(x => x.id === id);
+    
+    if (type === 'link') {
+        // A) Einfacher Link Share
         if (navigator.share) {
-            navigator.share({ title: m.title, text: `Gönn dir: ${m.title}`, url: m.url });
+            navigator.share({ title: m.title, url: m.url });
         } else {
             navigator.clipboard.writeText(m.url);
             showToast("Link kopiert!");
         }
-    } 
-    // Fall 2: Es ist lokal -> Echtes Bild teilen
-    else if (m.source === 'local') {
+    } else {
+        // B) Versuch: Datei runterladen & teilen
+        showToast("Lade Datei...", true); // Info an User
         try {
-            const blob = await dbGet(m.imageId);
-            if (!blob) return showToast("Bildfehler");
+            // Fetch Versuch
+            const response = await fetch(m.url);
+            const blob = await response.blob();
             
-            const file = new File([blob], "meme.jpg", { type: blob.type });
-            
+            // Dateinamen/Typ raten
+            const ext = m.mediaType === 'video' ? 'mp4' : 'jpg';
+            const file = new File([blob], `meme_share.${ext}`, { type: blob.type });
+
             if (navigator.canShare && navigator.canShare({ files: [file] })) {
                 await navigator.share({
                     files: [file],
@@ -892,13 +966,33 @@ async function shareMeme(id) {
                     text: m.title
                 });
             } else {
-                showToast("Teilen nicht unterstützt");
+                throw new Error("Sharing nicht unterstützt");
             }
-        } catch(e) {
+        } catch (e) {
             console.error(e);
-            showToast("Fehler beim Teilen");
+            // FALLBACK BEI FEHLER (CORS)
+            showToast("⚠️ Download blockiert! Teile stattdessen Link...");
+            setTimeout(() => {
+                if (navigator.share) navigator.share({ title: m.title, url: m.url });
+            }, 1500);
         }
     }
+}
+
+// 4. Helper für lokale Dateien (bleibt ähnlich wie vorher)
+async function shareLocalFile(m) {
+    try {
+        const blob = await dbGet(m.imageId);
+        if (!blob) return showToast("Bildfehler");
+        
+        const file = new File([blob], "meme.jpg", { type: blob.type });
+        
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: m.title });
+        } else {
+            showToast("Teilen nicht unterstützt");
+        }
+    } catch(e) { showToast("Fehler beim Teilen"); }
 }
 
 /* =========================================

@@ -1207,7 +1207,17 @@ async function downloadWithProxies(url) {
 
    
 // Start
-init();
+async function init() {
+    // Warten, bis die Datenbank wirklich bereit ist
+    try {
+        await dbPromise;
+        renderTags();
+        renderGallery();
+        updateDbStats();
+    } catch (e) {
+        console.error("DB Startfehler:", e);
+    }
+}
 
 </script>
 </body>

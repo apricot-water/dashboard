@@ -565,12 +565,24 @@ async function renderGallery() {
 function openAddModal() {
     editModeId = null;
     tempMedia = null;
+    
     document.getElementById('modalTitle').innerText = "Neuer Upload";
+    
+    // Alles leeren
     document.getElementById('fileInput').value = '';
     document.getElementById('urlInput').value = '';
     document.getElementById('memeTitle').value = '';
     document.getElementById('memeTags').value = '';
+    
+    // Preview verstecken
     document.getElementById('previewContainer').style.display = 'none';
+    document.getElementById('previewContainer').innerHTML = '';
+    
+    // Buttons resetten
+    document.querySelector('#addModal .btn-primary').innerText = "SPEICHERN ✨";
+    const delBtn = document.getElementById('delBtn');
+    if(delBtn) delBtn.style.display = 'none';
+
     switchTab('upload');
     document.getElementById('addModal').style.display = 'flex';
 }
@@ -632,28 +644,31 @@ function showPreview(src, type) {
 }
 
 async function saveMeme() {
-    if(!tempMedia && !editModeId) return showToast("Kein Bild gewählt!");
-    
     const title = document.getElementById('memeTitle').value.trim() || "Unbenannt";
     const tags = document.getElementById('memeTags').value.split(',').map(t=>t.trim()).filter(t=>t);
     
-    // UPDATE MODE
+    // Validation: Wenn neu, muss Bild da sein. Wenn Edit, reicht alter Stand.
+    if(!editModeId && !tempMedia) return showToast("Bitte Bild oder Link wählen!");
+
+    // === UPDATE MODE ===
     if (editModeId) {
         const idx = memes.findIndex(m => m.id === editModeId);
         if(idx !== -1) {
+            // Metadaten updaten
             memes[idx].title = title;
             memes[idx].tags = tags;
-            // Falls neues Medium gewählt wurde
+            
+            // Nur wenn User ein NEUES Bild/Link gewählt hat (tempMedia ist gesetzt)
             if(tempMedia) {
-                // Altes löschen wenn lokal
+                // Altes lokales Bild löschen, um Speicher zu sparen
                 if(memes[idx].source === 'local') await dbDel(memes[idx].imageId);
                 
-                // Neues setzen
+                // Neues verarbeiten
                 await processMediaSave(memes[idx]);
             }
         }
     } 
-    // CREATE MODE
+    // === CREATE MODE ===
     else {
         const newMeme = {
             id: Date.now().toString(),
@@ -668,8 +683,13 @@ async function saveMeme() {
     
     saveToLocal();
     closeModal('addModal');
-    setFilter('ALL'); // Reset filter to show new
-    showToast("Gespeichert! 👾");
+    
+    // WICHTIG: UI Refresh!
+    // Falls wir gerade in einem Filter sind, bleiben wir da, sonst update.
+    renderTags();    
+    renderGallery(); 
+    
+    showToast(editModeId ? "Aktualisiert! ✅" : "Gespeichert! 👾");
 }
 
 async function processMediaSave(memeObj) {
@@ -704,32 +724,39 @@ function toggleFav(id) {
 }
 
 async function openEdit(id) {
-    // Einfache Version: Wir erlauben hier das Bearbeiten von Text/Tags und Löschen
     const m = memes.find(x => x.id === id);
     if(!m) return;
     
     editModeId = id;
-    tempMedia = null; // Reset temp
+    tempMedia = null; // WICHTIG: Temp-Speicher leeren, damit wir wissen, ob was NEUES gewählt wurde
     
-    document.getElementById('modalTitle').innerText = "Bearbeiten";
-    document.getElementById('memeTitle').value = m.title;
-    document.getElementById('memeTags').value = m.tags.join(', ');
+    // UI Reset & Befüllen
+    document.getElementById('modalTitle').innerText = "Meme bearbeiten";
+    document.getElementById('memeTitle').value = m.title || "";
+    document.getElementById('memeTags').value = m.tags ? m.tags.join(', ') : "";
+    document.getElementById('fileInput').value = ''; // File Input resetten
     
-    // Preview laden
-    let src = '';
+    // Preview laden & Tab wählen
     if(m.source === 'local') {
-        const blob = await dbGet(m.imageId);
-        if(blob) src = URL.createObjectURL(blob);
+        switchTab('upload');
+        document.getElementById('urlInput').value = ''; 
+        
+        // Bild aus DB holen für Preview
+        try {
+            const blob = await dbGet(m.imageId);
+            if(blob) showPreview(URL.createObjectURL(blob), 'image');
+        } catch(e) { console.error(e); }
+        
     } else {
-        src = m.url;
+        switchTab('link');
+        document.getElementById('urlInput').value = m.url; // URL Feld füllen!
+        showPreview(m.url, m.mediaType || 'image');
     }
-    showPreview(src, m.mediaType || 'image');
     
-    // Löschen Button hinzufügen (Quick hack)
-    const btn = document.querySelector('#addModal .btn-primary');
-    btn.innerText = "ÄNDERUNGEN SPEICHERN";
+    // Button Text anpassen
+    document.querySelector('#addModal .btn-primary').innerText = "ÄNDERUNGEN SPEICHERN";
     
-    // Delete Button einfügen falls nicht da
+    // Löschen Button Logik
     let delBtn = document.getElementById('delBtn');
     if(!delBtn) {
         delBtn = document.createElement('button');
@@ -738,16 +765,14 @@ async function openEdit(id) {
         delBtn.style.background = 'var(--warn-bg)';
         delBtn.style.color = '#000';
         delBtn.innerText = "LÖSCHEN 🗑️";
-        delBtn.onclick = () => deleteMeme(id);
         document.querySelector('#addModal .modal-content').appendChild(delBtn);
-    } else {
-        delBtn.style.display = 'block';
-        delBtn.onclick = () => deleteMeme(id);
     }
+    delBtn.style.display = 'block';
+    delBtn.onclick = () => deleteMeme(id);
 
     document.getElementById('addModal').style.display = 'flex';
 }
-
+   
 async function deleteMeme(id) {
     if(!confirm("Wirklich löschen?")) return;
     const m = memes.find(x => x.id === id);

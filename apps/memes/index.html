@@ -988,11 +988,13 @@ function showShareChoice(m) {
 
 // 3. Ausführung der Wahl
 async function executeShare(id, type) {
-    document.getElementById('shareOverlay').remove(); // Popup schließen
+    // Popup schließen
+    const overlay = document.getElementById('shareOverlay');
+    if(overlay) overlay.remove();
+    
     const m = memes.find(x => x.id === id);
     
     if (type === 'link') {
-        // A) Einfacher Link Share
         if (navigator.share) {
             navigator.share({ title: m.title, url: m.url });
         } else {
@@ -1000,14 +1002,15 @@ async function executeShare(id, type) {
             showToast("Link kopiert!");
         }
     } else {
-        // B) Versuch: Datei runterladen & teilen
-        showToast("Lade Datei...", true); // Info an User
+        // B) Bild/Datei teilen
+        showToast("Lade Datei...", true);
         try {
-            // Fetch Versuch
-            const response = await fetch(m.url);
-            const blob = await response.blob();
+            // HIER IST DER FIX: Wir nutzen die Proxy-Engine statt einfachem fetch!
+            const blob = await downloadWithProxies(m.url);
             
-            // Dateinamen/Typ raten
+            if (!blob) throw new Error("Download fehlgeschlagen");
+            
+            // Dateityp erraten
             const ext = m.mediaType === 'video' ? 'mp4' : 'jpg';
             const file = new File([blob], `meme_share.${ext}`, { type: blob.type });
 
@@ -1022,8 +1025,7 @@ async function executeShare(id, type) {
             }
         } catch (e) {
             console.error(e);
-            // FALLBACK BEI FEHLER (CORS)
-            showToast("⚠️ Download blockiert! Teile stattdessen Link...");
+            showToast("⚠️ Download blockiert! Teile Link...");
             setTimeout(() => {
                 if (navigator.share) navigator.share({ title: m.title, url: m.url });
             }, 1500);
@@ -1031,6 +1033,7 @@ async function executeShare(id, type) {
     }
 }
 
+                                
 // 4. Helper für lokale Dateien (bleibt ähnlich wie vorher)
 async function shareLocalFile(m) {
     try {

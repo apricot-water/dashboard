@@ -462,11 +462,16 @@ async function dbDel(id) {
 /* =========================================
    2. CORE LOGIC
    ========================================= */
-
-function init() {
-    renderTags();
-    renderGallery();
-    updateDbStats();
+async function init() {
+    // Warten, bis die Datenbank wirklich bereit ist
+    try {
+        await dbPromise;
+        renderTags();
+        renderGallery();
+        updateDbStats();
+    } catch (e) {
+        console.error("DB Startfehler:", e);
+    }
 }
 
 function renderTags() {

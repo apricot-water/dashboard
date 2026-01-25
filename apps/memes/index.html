@@ -693,22 +693,49 @@ async function saveMeme() {
 }
 
 async function processMediaSave(memeObj) {
+    // FALL A: Lokaler Upload (Datei vom Handy)
     if (tempMedia.type === 'local') {
         const imgId = 'img_' + Date.now();
-        await dbSave(imgId, tempMedia.data); // Blob in DB
+        await dbSave(imgId, tempMedia.data);
         memeObj.source = 'local';
         memeObj.imageId = imgId;
         memeObj.url = null;
-        memeObj.mediaType = 'image';
-    } else {
-        // URL Mode
-        memeObj.source = 'url';
-        memeObj.url = tempMedia.data;
-        memeObj.imageId = null;
-        memeObj.mediaType = tempMedia.mediaType;
+        memeObj.mediaType = tempMedia.data.type.startsWith('video') ? 'video' : 'image';
+    } 
+    // FALL B: URL (Versuch Download via Proxy)
+    else {
+        showToast("Lade herunter... ⏳", true); // Feedback geben
+        
+        // Versuch: Über Proxy ziehen
+        const downloadedBlob = await downloadWithProxies(tempMedia.data);
+
+        if (downloadedBlob) {
+            // HURRA! Es hat geklappt -> Wir speichern es wie ein lokales Bild!
+            const imgId = 'img_' + Date.now();
+            await dbSave(imgId, downloadedBlob);
+            
+            memeObj.source = 'local'; // Wir tun so, als wäre es lokal
+            memeObj.imageId = imgId;
+            memeObj.url = null; // URL brauchen wir nicht mehr zwingend
+            // Typ bestimmen
+            memeObj.mediaType = downloadedBlob.type.startsWith('video') ? 'video' : 'image';
+            console.log("Erfolgreich via Proxy gespeichert!");
+        } 
+        else {
+            // FEHLSCHLAG: Fallback auf Link-Modus
+            console.log("Download failed. Fallback to Link Mode.");
+            memeObj.source = 'url';
+            memeObj.url = tempMedia.data;
+            memeObj.imageId = null;
+            memeObj.mediaType = tempMedia.mediaType;
+            
+            // User kurz informieren, dass es "nur" ein Link geworden ist
+            setTimeout(() => showToast("Nur verlinkt (Download blockiert)"), 500);
+        }
     }
 }
 
+   
 /* =========================================
    4. UTILS & ACTIONS
    ========================================= */
@@ -1128,6 +1155,39 @@ function endDrag() {
     document.getElementById('lightboxImg').style.transition = 'transform 0.1s ease-out';
 }
 
+
+/* =========================================
+   PROXY DOWNLOAD ENGINE
+   ========================================= */
+async function downloadWithProxies(url) {
+    // Liste der Proxies (Priorität: Oben nach unten)
+    const proxies = [
+        // 1. CorsProxy.io (Sehr schnell & zuverlässig)
+        (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+        // 2. AllOrigins (Guter Fallback)
+        (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`
+    ];
+
+    for (let proxyGen of proxies) {
+        try {
+            const proxyUrl = proxyGen(url);
+            console.log("Versuche Proxy:", proxyUrl);
+            
+            const res = await fetch(proxyUrl);
+            if (!res.ok) throw new Error("Proxy Fehler");
+            
+            const blob = await res.blob();
+            // Check: Ist es wirklich ein Bild/Video?
+            if (blob.size < 100) throw new Error("Datei zu klein (Fehlerseite?)");
+            
+            return blob; // Erfolg! Blob zurückgeben
+        } catch (e) {
+            console.log("Proxy gescheitert, nächster...");
+        }
+    }
+    return null; // Alle Proxies fehlgeschlagen
+}
+   
 // Start
 init();
 

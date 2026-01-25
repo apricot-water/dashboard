@@ -1159,12 +1159,21 @@ function endDrag() {
 /* =========================================
    PROXY DOWNLOAD ENGINE
    ========================================= */
+/* =========================================
+   PROXY DOWNLOAD ENGINE (UPDATED)
+   ========================================= */
 async function downloadWithProxies(url) {
-    // Liste der Proxies (Priorität: Oben nach unten)
     const proxies = [
-        // 1. CorsProxy.io (Sehr schnell & zuverlässig)
-        (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-        // 2. AllOrigins (Guter Fallback)
+        // 1. CorsProxy.io (Explizit mit 'url=' Parameter)
+        (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+        
+        // 2. CorsFix (Neu aufgenommen)
+        (u) => `https://proxy.corsfix.com/?${encodeURIComponent(u)}`,
+        
+        // 3. CodeTabs (Stabiler Fallback)
+        (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+        
+        // 4. AllOrigins (Letzter Versuch)
         (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`
     ];
 
@@ -1174,19 +1183,25 @@ async function downloadWithProxies(url) {
             console.log("Versuche Proxy:", proxyUrl);
             
             const res = await fetch(proxyUrl);
-            if (!res.ok) throw new Error("Proxy Fehler");
+            if (!res.ok) throw new Error("Status " + res.status);
             
             const blob = await res.blob();
-            // Check: Ist es wirklich ein Bild/Video?
-            if (blob.size < 100) throw new Error("Datei zu klein (Fehlerseite?)");
             
-            return blob; // Erfolg! Blob zurückgeben
+            // WICHTIG: Prüfen ob wir wirklich ein Bild/Video haben und keine HTML-Fehlerseite
+            if (blob.type.includes('text') || blob.type.includes('html')) {
+                throw new Error("Proxy lieferte HTML statt Bild");
+            }
+            if (blob.size < 500) throw new Error("Datei zu klein (wahrscheinlich Fehler)");
+            
+            return blob; // Erfolg!
         } catch (e) {
-            console.log("Proxy gescheitert, nächster...");
+            console.warn("Proxy fehlgeschlagen:", e.message);
+            // Loop läuft weiter zum nächsten Proxy
         }
     }
-    return null; // Alle Proxies fehlgeschlagen
+    return null; // Alle gescheitert
 }
+
    
 // Start
 init();

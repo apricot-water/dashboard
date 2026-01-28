@@ -662,67 +662,74 @@ function handleFileSelect(input) {
 /* =========================================
    INPUT HANDLER (WITH FALLBACK)
    ========================================= */
+/* =========================================
+   INPUT HANDLER (FORCE LINK MODE)
+   ========================================= */
 async function handleUrlInput() {
     const inputField = document.getElementById('urlInput');
     let url = inputField.value.trim();
     if(!url) return;
     
     const cont = document.getElementById('previewContainer');
-    cont.innerHTML = '<div style="color:white; padding:20px; text-align:center;">🤖 Arbeite...<br><span style="font-size:10px">Teste verschiedene Server...</span></div>';
+    // Lade-Animation
+    cont.innerHTML = '<div style="color:white; padding:20px; text-align:center;">🤖 Checke Link...<br><span style="font-size:10px">Bitte warten...</span></div>';
     cont.style.display = 'flex';
 
-    // 1. Resolver starten
+    // 1. Versuchen das Video zu holen
     const result = await resolveSocialMedia(url);
     
-    // A) ECHTE VIDEO DATEI GEFUNDEN
+    // --- SZENARIO A: WIR HABEN DAS VIDEO (Download möglich) ---
     if (result && result !== "ERROR" && !result.fallback) {
-        showToast("Video extrahiert! 🎬");
+        showToast("Video gefunden! 🎬");
         
-        // Auto-Title
         if(result.desc && !document.getElementById('memeTitle').value) {
              document.getElementById('memeTitle').value = result.desc.substring(0, 50);
         }
 
         tempMedia = { 
             type: 'url', 
-            data: result.video, // Der direkte .mp4 Link
+            data: result.video, 
             mediaType: 'video', 
             originalUrl: inputField.value 
         };
         showPreview(result.video, 'video');
     } 
-    // B) FEHLGESCHLAGEN -> FALLBACK AUF LINK (Kein roter Fehler!)
-    else if (result === "ERROR" || result.fallback) {
-        console.log("Fallback mode active");
-        
-        let cover = null;
-        if(result.fallback && result.cover) cover = result.cover;
+    // --- SZENARIO B: GEHT NICHT / FALLBACK (Link Mode) ---
+    else {
+        // Hier war der Fehler: Wir haben früher tempMedia = null gesetzt.
+        // Jetzt erzwingen wir den "Link Modus".
+        console.log("Fallback: Nutze reinen Link.");
 
-        showToast("Download blockiert - Speichere als Link 🔗");
+        let cover = null;
+        // Falls wir zumindest ein Thumbnail retten konnten
+        if(result && result.cover) cover = result.cover;
 
         tempMedia = { 
             type: 'url', 
-            data: url, // Wir speichern den Original-Link
-            mediaType: 'video', // Wir tun so als ob, damit das Icon stimmt
-            isLinkOnly: true, // Neu: Flag für Render-Logik
-            cover: cover // Thumbnail speichern falls vorhanden
+            data: url,          // Der Original Link
+            mediaType: 'video', // Wir behandeln es als Video
+            isLinkOnly: true,   // Markierung: NICHT downloaden
+            cover: cover
         };
 
-        // Vorschau: Wenn wir ein Cover haben, zeigen wir das, sonst Standard
-        if (cover) {
-            cont.innerHTML = `<div style="position:relative; width:100%; height:100%;">
-                <img src="${cover}" style="width:100%; height:100%; object-fit:cover; opacity:0.7;">
-                <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:30px;">🔗</div>
-            </div>`;
-        } else {
-            cont.innerHTML = `<div style="padding:20px; text-align:center;">
-                <div style="font-size:40px; margin-bottom:10px;">🔗</div>
-                <div>Nur Link gespeichert<br>(Video geschützt)</div>
-            </div>`;
+        // UI Feedback: Kein roter Fehler mehr, sondern "Link Modus"
+        let icon = "🔗";
+        let text = "Nur Link<br><span style='font-size:10px; opacity:0.7'>Download blockiert, wird gestreamt</span>";
+        
+        let bgStyle = "";
+        if(cover) {
+            // Wenn wir ein Cover haben, zeigen wir es im Hintergrund abgedunkelt
+            bgStyle = `background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('${cover}') center/cover no-repeat;`;
         }
+
+        cont.innerHTML = `
+            <div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; ${bgStyle}">
+                <div style="font-size:40px; margin-bottom:5px;">${icon}</div>
+                <div>${text}</div>
+            </div>
+        `;
     }
 }
-   
 
 function showPreview(src, type) {
     const cont = document.getElementById('previewContainer');
@@ -786,12 +793,10 @@ async function saveMeme() {
 }
 
 async function processMediaSave(memeObj) {
-    // FALL A: Lokaler Upload (Datei vom Handy)
+    // FALL A: Lokaler Upload
     if (tempMedia.type === 'local') {
         const file = tempMedia.data;
-        // Typ erkennen (Video oder Image)
         const type = file.type.startsWith('video') ? 'video' : 'image';
-        
         const imgId = 'file_' + Date.now();
         await dbSave(imgId, file);
         
@@ -800,42 +805,47 @@ async function processMediaSave(memeObj) {
         memeObj.url = null;
         memeObj.mediaType = type;
     } 
-    // FALL B: URL (Versuch Download + Fallback)
+    // FALL B: URL / Link
     else {
-        const type = tempMedia.mediaType; // 'image' oder 'video' (wurde in handleUrlInput erkannt)
+        const type = tempMedia.mediaType; 
         
-        // Versuch: Smart Download
-        showToast(type === 'video' ? "Starte Video Download..." : "Lade Bild...", true);
-        
-        // Wir nutzen den neuen Downloader
+        // CHECK: Haben wir schon entschieden, dass es nur ein Link sein soll?
+        if (tempMedia.isLinkOnly) {
+            console.log("Skipping download (Link Mode active)");
+            memeObj.source = 'url';
+            memeObj.url = tempMedia.data;
+            memeObj.imageId = null;
+            memeObj.mediaType = type;
+            // Cover speichern falls vorhanden (für V2 nice-to-have)
+            if(tempMedia.cover) memeObj.cover = tempMedia.cover;
+            return; // Raus hier, wir sind fertig!
+        }
+
+        // Falls nicht Link-Only, versuchen wir den Download
+        showToast("Lade herunter... ⏳", true);
         const downloadedBlob = await downloadWithChunks(tempMedia.data);
 
         if (downloadedBlob) {
-            // ERFOLG: Speichern in DB
+            // Download hat geklappt
             const imgId = 'dl_' + Date.now();
-            
-            // Blob Type korrigieren falls nötig
             const finalBlob = downloadedBlob.type ? downloadedBlob : new Blob([downloadedBlob], {type: type === 'video' ? 'video/mp4' : 'image/jpeg'});
             
             await dbSave(imgId, finalBlob);
             
             memeObj.source = 'local';
             memeObj.imageId = imgId;
-            memeObj.url = null; // URL nicht mehr nötig
+            memeObj.url = null; 
             memeObj.mediaType = type;
             console.log("Erfolgreich offline gespeichert!");
         } 
         else {
-            // FEHLSCHLAG: Fallback auf Link-Only
-            console.log("Download failed. Fallback to Link Mode.");
-            
+            // Download fehlgeschlagen -> Fallback auf Link
+            console.log("Download failed final. Link Mode.");
             memeObj.source = 'url';
-            memeObj.url = tempMedia.data;
+            memeObj.url = tempMedia.data; // Hier nehmen wir tempMedia.data (was im Fall von TikTok die MP4 URL sein kann, oder Original)
             memeObj.imageId = null;
             memeObj.mediaType = type;
-            
-            // Feedback an User
-            setTimeout(() => showToast("Download nicht möglich. Nur verlinkt! 🔗"), 500);
+            setTimeout(() => showToast("Nur verlinkt (Download blockiert)"), 500);
         }
     }
 }

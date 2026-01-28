@@ -640,16 +640,36 @@ function handleFileSelect(input) {
     }
 }
 
-function handleUrlInput() {
-    const url = document.getElementById('urlInput').value.trim();
+async function handleUrlInput() {
+    const inputField = document.getElementById('urlInput');
+    let url = inputField.value.trim();
     if(!url) return;
     
-    // Simple Erweiterung der Erkennung
-    const isVideo = url.match(/\.(mp4|webm|mov|mkv)$/i) || url.includes('mp4'); 
-    const mediaType = isVideo ? 'video' : 'image';
+    // Reset Preview
+    const cont = document.getElementById('previewContainer');
+    cont.innerHTML = '<div style="color:white; padding:20px;">Lade Vorschau... ⏳</div>';
+    cont.style.display = 'flex';
+
+    // 1. Checken ob es TikTok/Insta ist und Link umwandeln
+    const resolvedUrl = await resolveSocialMedia(url);
     
-    tempMedia = { type: 'url', data: url, mediaType: mediaType };
-    showPreview(url, mediaType);
+    if (resolvedUrl) {
+        // Wir haben eine echte Video-Datei gefunden!
+        url = resolvedUrl; 
+        showToast("Video gefunden! 🎬");
+        
+        // Wir speichern das aufgelöste Video temporär
+        tempMedia = { type: 'url', data: url, mediaType: 'video', originalUrl: inputField.value };
+        showPreview(url, 'video');
+    } 
+    else {
+        // Standard Verhalten (Direkter Link oder unbekannte Seite)
+        const isVideo = url.match(/\.(mp4|webm|mov|mkv)$/i) || url.includes('mp4');
+        const mediaType = isVideo ? 'video' : 'image';
+        
+        tempMedia = { type: 'url', data: url, mediaType: mediaType };
+        showPreview(url, mediaType);
+    }
 }
    
 
@@ -1274,6 +1294,59 @@ async function downloadWithChunks(url) {
         console.warn("Download Error:", e);
         return null; // Fallback Trigger
     }
+}
+
+   /* =========================================
+   SOCIAL MEDIA RESOLVER (TikTok, Insta, etc.)
+   ========================================= */
+async function resolveSocialMedia(url) {
+    // Liste der unterstützten Seiten
+    const patterns = [
+        /tiktok\.com/, 
+        /instagram\.com/, 
+        /twitter\.com/, 
+        /x\.com/, 
+        /youtube\.com\/shorts/, 
+        /youtu\.be/
+    ];
+    
+    const isSocial = patterns.some(r => r.test(url));
+    if (!isSocial) return null; // Ist wohl ein direkter Link
+
+    showToast("🔍 Suche Video-Datei...", true);
+
+    try {
+        // Wir nutzen eine öffentliche Instanz von Cobalt (sehr zuverlässig für TikTok/Insta)
+        // Alternative Instanzen: https://instances.cobalt.tools/
+        const api = "https://api.cobalt.tools/api/json"; 
+        
+        const res = await fetch(api, {
+            method: 'POST',
+            headers: { 
+                'Accept': 'application/json', 
+                'Content-Type': 'application/json' 
+            },
+            body: JSON.stringify({ 
+                url: url,
+                vCodec: 'h264' // Sorgt für maximale Kompatibilität
+            })
+        });
+
+        const data = await res.json();
+        
+        if (data.status === 'stream' || data.status === 'redirect') {
+            console.log("Resolved URL:", data.url);
+            return data.url; // Das ist der direkte .mp4 Link!
+        }
+        if (data.status === 'picker') {
+             // Passiert manchmal bei Alben, wir nehmen das erste
+             return data.picker[0].url;
+        }
+    } catch (e) {
+        console.error("Resolver failed:", e);
+    }
+    
+    return null; // Fallback: Wir nutzen den Original-Link
 }
 
    

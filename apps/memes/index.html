@@ -640,30 +640,50 @@ function handleFileSelect(input) {
     }
 }
 
+/* =========================================
+   INPUT HANDLER (FIXED)
+   ========================================= */
 async function handleUrlInput() {
     const inputField = document.getElementById('urlInput');
     let url = inputField.value.trim();
     if(!url) return;
     
-    // Reset Preview
     const cont = document.getElementById('previewContainer');
-    cont.innerHTML = '<div style="color:white; padding:20px;">Lade Vorschau... ⏳</div>';
+    cont.innerHTML = '<div style="color:white; padding:20px; text-align:center;">🤖 Arbeite...<br><span style="font-size:10px">Verbindung zu API...</span></div>';
     cont.style.display = 'flex';
 
-    // 1. Checken ob es TikTok/Insta ist und Link umwandeln
-    const resolvedUrl = await resolveSocialMedia(url);
+    // 1. Social Media Check
+    const result = await resolveSocialMedia(url);
     
-    if (resolvedUrl) {
-        // Wir haben eine echte Video-Datei gefunden!
-        url = resolvedUrl; 
+    if (result && result !== "ERROR") {
+        // Erfolg!
+        url = result.video;
         showToast("Video gefunden! 🎬");
         
-        // Wir speichern das aufgelöste Video temporär
-        tempMedia = { type: 'url', data: url, mediaType: 'video', originalUrl: inputField.value };
+        // Wir speichern das Resultat
+        tempMedia = { 
+            type: 'url', 
+            data: url, 
+            mediaType: 'video', 
+            originalUrl: inputField.value,
+            // Falls wir ein Cover haben, könnten wir es später nutzen, 
+            // aber für V1 reicht uns das Video
+        };
+        
+        // Titel automatisch ausfüllen falls vorhanden
+        if(result.desc && !document.getElementById('memeTitle').value) {
+             document.getElementById('memeTitle').value = result.desc.substring(0, 50) + "...";
+        }
+
         showPreview(url, 'video');
     } 
+    else if (result === "ERROR") {
+        // Fehler beim Auflösen -> ABBRUCH
+        cont.innerHTML = '<div style="color:#cf6679; padding:20px;">❌ Video konnte nicht extrahiert werden.<br>Link nicht unterstützt oder geschützt.</div>';
+        tempMedia = null;
+    }
     else {
-        // Standard Verhalten (Direkter Link oder unbekannte Seite)
+        // Kein Social Link, sondern direkter Link (z.B. user tippt direkt .mp4 ein)
         const isVideo = url.match(/\.(mp4|webm|mov|mkv)$/i) || url.includes('mp4');
         const mediaType = isVideo ? 'video' : 'image';
         
@@ -1299,54 +1319,85 @@ async function downloadWithChunks(url) {
    /* =========================================
    SOCIAL MEDIA RESOLVER (TikTok, Insta, etc.)
    ========================================= */
+/* =========================================
+   SOCIAL MEDIA RESOLVER (FIXED V2)
+   ========================================= */
 async function resolveSocialMedia(url) {
-    // Liste der unterstützten Seiten
-    const patterns = [
-        /tiktok\.com/, 
-        /instagram\.com/, 
-        /twitter\.com/, 
-        /x\.com/, 
-        /youtube\.com\/shorts/, 
-        /youtu\.be/
-    ];
+    const isTikTok = /tiktok\.com/.test(url);
     
-    const isSocial = patterns.some(r => r.test(url));
-    if (!isSocial) return null; // Ist wohl ein direkter Link
+    // Andere unterstützte Seiten (Insta, Youtube Shorts, X)
+    const patterns = [/instagram\.com/, /twitter\.com/, /x\.com/, /youtube\.com\/shorts/, /youtu\.be/];
+    const isOther = patterns.some(r => r.test(url));
 
-    showToast("🔍 Suche Video-Datei...", true);
+    if (!isTikTok && !isOther) return null; // Kein Social Link
 
-    try {
-        // Wir nutzen eine öffentliche Instanz von Cobalt (sehr zuverlässig für TikTok/Insta)
-        // Alternative Instanzen: https://instances.cobalt.tools/
-        const api = "https://api.cobalt.tools/api/json"; 
-        
-        const res = await fetch(api, {
-            method: 'POST',
-            headers: { 
-                'Accept': 'application/json', 
-                'Content-Type': 'application/json' 
-            },
-            body: JSON.stringify({ 
-                url: url,
-                vCodec: 'h264' // Sorgt für maximale Kompatibilität
-            })
-        });
+    showToast("🔍 Analysiere Video...", true);
 
-        const data = await res.json();
-        
-        if (data.status === 'stream' || data.status === 'redirect') {
-            console.log("Resolved URL:", data.url);
-            return data.url; // Das ist der direkte .mp4 Link!
+    // --- STRATEGIE 1: TIKTOK SPEZIAL (TikWM API) ---
+    if (isTikTok) {
+        try {
+            // Wir nutzen AllOrigins als Proxy für die GET Anfrage an TikWM
+            const targetApi = `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`;
+            const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetApi)}`;
+            
+            const res = await fetch(proxyUrl);
+            const raw = await res.json();
+            const data = JSON.parse(raw.contents); // AllOrigins packt response in "contents"
+
+            if (data.code === 0 && data.data) {
+                console.log("TikTok resolved via TikWM");
+                return {
+                    video: data.data.play,      // Der MP4 Link
+                    cover: data.data.cover,     // Das Vorschaubild
+                    desc: data.data.title       // Videobeschreibung
+                };
+            }
+        } catch (e) {
+            console.warn("TikWM failed, trying fallback...", e);
         }
-        if (data.status === 'picker') {
-             // Passiert manchmal bei Alben, wir nehmen das erste
-             return data.picker[0].url;
+    }
+
+    // --- STRATEGIE 2: COBALT (Für Insta, YT & TikTok Fallback) ---
+    try {
+        // Wir probieren eine Liste von Instanzen, falls die Haupt-API blockt
+        const instances = [
+            "https://api.cobalt.tools/api/json",
+            "https://cobalt.xyzen.dev/api/json"
+        ];
+
+        for (const apiBase of instances) {
+            try {
+                // HIER IST DER TRICK: Wir nutzen window.fetch direkt. 
+                // Wenn das blockiert (CORS), ist es ohne Backend schwer.
+                // Wir setzen "Accept: application/json" strikt.
+                
+                const res = await fetch(apiBase, {
+                    method: 'POST',
+                    headers: { 
+                        'Accept': 'application/json', 
+                        'Content-Type': 'application/json' 
+                    },
+                    body: JSON.stringify({ url: url, vCodec: 'h264' })
+                });
+
+                const data = await res.json();
+
+                if (data.status === 'stream' || data.status === 'redirect') {
+                    return { video: data.url, cover: null, desc: null };
+                }
+                if (data.status === 'picker') {
+                    return { video: data.picker[0].url, cover: data.picker[0].thumb, desc: null };
+                }
+            } catch(innerErr) {
+                continue; // Nächste Instanz probieren
+            }
         }
     } catch (e) {
-        console.error("Resolver failed:", e);
+        console.error("All resolvers failed", e);
     }
     
-    return null; // Fallback: Wir nutzen den Original-Link
+    // Wenn wir hier ankommen, hat nichts geklappt.
+    return "ERROR"; 
 }
 
    

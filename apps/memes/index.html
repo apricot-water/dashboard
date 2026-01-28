@@ -550,20 +550,36 @@ async function renderGallery() {
             src = m.url;
         }
 
-        // 2. TYP BESTIMMEN (Image vs Video)
+      // 2. TYP BESTIMMEN
         if (m.mediaType === 'video') {
-            // Grid-Video: Stumm, Loop, Autoplay (Data-Saver freundlich: playsinline)
-            // onerror: Falls Link tot, zeige Icon
-            mediaHTML = `
-                <video src="${src}" loop muted autoplay playsinline 
-                       oncontextmenu="return false;"
-                       poster="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iIzMzMyIgZD0iTTAgMGgyNHYyNEgwVjB6Ii8+PC9zdmc+">
-                </video>
-                <div class="vid-indicator">▶ VIDEO</div>
-            `;
+            // Check ob es ein direkter File-Link ist (mp4) oder ein Web-Link (youtube)
+            const isWebLink = !src.match(/\.(mp4|webm|mov)$/i) && !src.startsWith('blob:');
+            
+            if (isWebLink) {
+                // FALLBACK DARSTELLUNG FÜR YOUTUBE/TIKTOK LINKS (die nicht runtergeladen wurden)
+                // Wir versuchen ein Thumbnail zu zeigen, wenn wir eines gespeichert haben (m.cover) oder generieren eines
+                let poster = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iIzMzMyIgZD0iTTAgMGgyNHYyNEgwVjB6Ii8+PC9zdmc+";
+                
+                // YouTube Thumbnail Trick
+                const ytMatch = src.match(/(?:shorts\/|v=|youtu\.be\/)([\w-]{11})/);
+                if(ytMatch) poster = `https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`;
+                
+                mediaHTML = `
+                    <img src="${poster}" style="width:100%; height:100%; object-fit:cover; opacity:0.8;">
+                    <div class="vid-indicator" style="background:var(--accent); color:black;">🔗 STREAM</div>
+                `;
+            } else {
+                // ECHTES VIDEO FILE (Blob oder MP4 Link)
+                mediaHTML = `
+                    <video src="${src}" loop muted autoplay playsinline 
+                           oncontextmenu="return false;"
+                           poster="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iIzMzMyIgZD0iTTAgMGgyNHYyNEgwVjB6Ii8+PC9zdmc+">
+                    </video>
+                    <div class="vid-indicator">▶ VIDEO</div>
+                `;
+            }
         } else {
-            // Bild (Fallback SVG bei Fehler)
-            mediaHTML = `<img src="${src}" loading="lazy" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHRleHQgeT0iMTUiIGZvbnQtc2l6ZT0iMjAiPuKAPC90ZXh0Pjwvc3ZnPg=='">`;
+             mediaHTML = `<img src="${src}" loading="lazy" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHRleHQgeT0iMTUiIGZvbnQtc2l6ZT0iMjAiPuKAPC90ZXh0Pjwvc3ZnPg=='">`;
         }
 
         card.innerHTML = `
@@ -643,52 +659,67 @@ function handleFileSelect(input) {
 /* =========================================
    INPUT HANDLER (FIXED)
    ========================================= */
+/* =========================================
+   INPUT HANDLER (WITH FALLBACK)
+   ========================================= */
 async function handleUrlInput() {
     const inputField = document.getElementById('urlInput');
     let url = inputField.value.trim();
     if(!url) return;
     
     const cont = document.getElementById('previewContainer');
-    cont.innerHTML = '<div style="color:white; padding:20px; text-align:center;">🤖 Arbeite...<br><span style="font-size:10px">Verbindung zu API...</span></div>';
+    cont.innerHTML = '<div style="color:white; padding:20px; text-align:center;">🤖 Arbeite...<br><span style="font-size:10px">Teste verschiedene Server...</span></div>';
     cont.style.display = 'flex';
 
-    // 1. Social Media Check
+    // 1. Resolver starten
     const result = await resolveSocialMedia(url);
     
-    if (result && result !== "ERROR") {
-        // Erfolg!
-        url = result.video;
-        showToast("Video gefunden! 🎬");
+    // A) ECHTE VIDEO DATEI GEFUNDEN
+    if (result && result !== "ERROR" && !result.fallback) {
+        showToast("Video extrahiert! 🎬");
         
-        // Wir speichern das Resultat
-        tempMedia = { 
-            type: 'url', 
-            data: url, 
-            mediaType: 'video', 
-            originalUrl: inputField.value,
-            // Falls wir ein Cover haben, könnten wir es später nutzen, 
-            // aber für V1 reicht uns das Video
-        };
-        
-        // Titel automatisch ausfüllen falls vorhanden
+        // Auto-Title
         if(result.desc && !document.getElementById('memeTitle').value) {
-             document.getElementById('memeTitle').value = result.desc.substring(0, 50) + "...";
+             document.getElementById('memeTitle').value = result.desc.substring(0, 50);
         }
 
-        showPreview(url, 'video');
+        tempMedia = { 
+            type: 'url', 
+            data: result.video, // Der direkte .mp4 Link
+            mediaType: 'video', 
+            originalUrl: inputField.value 
+        };
+        showPreview(result.video, 'video');
     } 
-    else if (result === "ERROR") {
-        // Fehler beim Auflösen -> ABBRUCH
-        cont.innerHTML = '<div style="color:#cf6679; padding:20px;">❌ Video konnte nicht extrahiert werden.<br>Link nicht unterstützt oder geschützt.</div>';
-        tempMedia = null;
-    }
-    else {
-        // Kein Social Link, sondern direkter Link (z.B. user tippt direkt .mp4 ein)
-        const isVideo = url.match(/\.(mp4|webm|mov|mkv)$/i) || url.includes('mp4');
-        const mediaType = isVideo ? 'video' : 'image';
+    // B) FEHLGESCHLAGEN -> FALLBACK AUF LINK (Kein roter Fehler!)
+    else if (result === "ERROR" || result.fallback) {
+        console.log("Fallback mode active");
         
-        tempMedia = { type: 'url', data: url, mediaType: mediaType };
-        showPreview(url, mediaType);
+        let cover = null;
+        if(result.fallback && result.cover) cover = result.cover;
+
+        showToast("Download blockiert - Speichere als Link 🔗");
+
+        tempMedia = { 
+            type: 'url', 
+            data: url, // Wir speichern den Original-Link
+            mediaType: 'video', // Wir tun so als ob, damit das Icon stimmt
+            isLinkOnly: true, // Neu: Flag für Render-Logik
+            cover: cover // Thumbnail speichern falls vorhanden
+        };
+
+        // Vorschau: Wenn wir ein Cover haben, zeigen wir das, sonst Standard
+        if (cover) {
+            cont.innerHTML = `<div style="position:relative; width:100%; height:100%;">
+                <img src="${cover}" style="width:100%; height:100%; object-fit:cover; opacity:0.7;">
+                <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:30px;">🔗</div>
+            </div>`;
+        } else {
+            cont.innerHTML = `<div style="padding:20px; text-align:center;">
+                <div style="font-size:40px; margin-bottom:10px;">🔗</div>
+                <div>Nur Link gespeichert<br>(Video geschützt)</div>
+            </div>`;
+        }
     }
 }
    
@@ -1322,81 +1353,86 @@ async function downloadWithChunks(url) {
 /* =========================================
    SOCIAL MEDIA RESOLVER (FIXED V2)
    ========================================= */
+/* =========================================
+   SOCIAL MEDIA RESOLVER (MULTI-MIRROR V3)
+   ========================================= */
 async function resolveSocialMedia(url) {
     const isTikTok = /tiktok\.com/.test(url);
+    const isYouTube = /(youtube\.com|youtu\.be)/.test(url);
     
-    // Andere unterstützte Seiten (Insta, Youtube Shorts, X)
-    const patterns = [/instagram\.com/, /twitter\.com/, /x\.com/, /youtube\.com\/shorts/, /youtu\.be/];
-    const isOther = patterns.some(r => r.test(url));
-
-    if (!isTikTok && !isOther) return null; // Kein Social Link
+    // Patterns für unterstützte Seiten
+    const patterns = [/tiktok\.com/, /instagram\.com/, /twitter\.com/, /x\.com/, /youtube\.com/, /youtu\.be/];
+    if (!patterns.some(r => r.test(url))) return null; // Kein Social Link
 
     showToast("🔍 Analysiere Video...", true);
 
-    // --- STRATEGIE 1: TIKTOK SPEZIAL (TikWM API) ---
+    // --- 1. TIKTOK SPEZIAL (TikWM - bleibt, da sehr stabil) ---
     if (isTikTok) {
         try {
-            // Wir nutzen AllOrigins als Proxy für die GET Anfrage an TikWM
             const targetApi = `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`;
             const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetApi)}`;
-            
             const res = await fetch(proxyUrl);
             const raw = await res.json();
-            const data = JSON.parse(raw.contents); // AllOrigins packt response in "contents"
-
+            const data = JSON.parse(raw.contents);
             if (data.code === 0 && data.data) {
-                console.log("TikTok resolved via TikWM");
-                return {
-                    video: data.data.play,      // Der MP4 Link
-                    cover: data.data.cover,     // Das Vorschaubild
-                    desc: data.data.title       // Videobeschreibung
-                };
+                return { video: data.data.play, cover: data.data.cover, desc: data.data.title };
             }
-        } catch (e) {
-            console.warn("TikWM failed, trying fallback...", e);
-        }
+        } catch (e) { console.warn("TikWM failed", e); }
     }
 
-    // --- STRATEGIE 2: COBALT (Für Insta, YT & TikTok Fallback) ---
-    try {
-        // Wir probieren eine Liste von Instanzen, falls die Haupt-API blockt
-        const instances = [
-            "https://api.cobalt.tools/api/json",
-            "https://cobalt.xyzen.dev/api/json"
-        ];
+    // --- 2. COBALT MIRRORS (Für YouTube, Insta & Fallback) ---
+    // Wir probieren diese Liste der Reihe nach durch
+    const instances = [
+        "https://co.wuk.sh/api/json",       // Oft sehr stabil für YT
+        "https://api.cobalt.tools/api/json", // Das Original
+        "https://cobalt.xyzen.dev/api/json",
+        "https://api.server.social/api/json"
+    ];
 
-        for (const apiBase of instances) {
-            try {
-                // HIER IST DER TRICK: Wir nutzen window.fetch direkt. 
-                // Wenn das blockiert (CORS), ist es ohne Backend schwer.
-                // Wir setzen "Accept: application/json" strikt.
-                
-                const res = await fetch(apiBase, {
-                    method: 'POST',
-                    headers: { 
-                        'Accept': 'application/json', 
-                        'Content-Type': 'application/json' 
-                    },
-                    body: JSON.stringify({ url: url, vCodec: 'h264' })
-                });
+    for (const apiBase of instances) {
+        try {
+            console.log("Trying API:", apiBase);
+            const res = await fetch(apiBase, {
+                method: 'POST',
+                headers: { 
+                    'Accept': 'application/json', 
+                    'Content-Type': 'application/json' 
+                },
+                body: JSON.stringify({ 
+                    url: url, 
+                    vCodec: 'h264',
+                    filenamePattern: 'basic'
+                })
+            });
 
-                const data = await res.json();
+            const data = await res.json();
 
-                if (data.status === 'stream' || data.status === 'redirect') {
-                    return { video: data.url, cover: null, desc: null };
-                }
-                if (data.status === 'picker') {
-                    return { video: data.picker[0].url, cover: data.picker[0].thumb, desc: null };
-                }
-            } catch(innerErr) {
-                continue; // Nächste Instanz probieren
+            // Erfolg?
+            if (data.status === 'stream' || data.status === 'redirect') {
+                return { video: data.url, cover: null, desc: null };
             }
+            if (data.status === 'picker') {
+                return { video: data.picker[0].url, cover: data.picker[0].thumb, desc: null };
+            }
+        } catch(innerErr) {
+            console.warn("Mirror failed:", apiBase);
+            continue; // Nächster Versuch
         }
-    } catch (e) {
-        console.error("All resolvers failed", e);
     }
     
-    // Wenn wir hier ankommen, hat nichts geklappt.
+    // --- 3. FALLBACK: Wenn alles fehlschlägt, aber es YouTube ist ---
+    // Wir geben zumindest das Thumbnail zurück, damit der Link schön aussieht
+    if (isYouTube) {
+        const vidId = url.match(/(?:shorts\/|v=|youtu\.be\/)([\w-]{11})/);
+        if (vidId && vidId[1]) {
+            return { 
+                fallback: true, // Markierung: "Kein Video-File, nur Link"
+                cover: `https://img.youtube.com/vi/${vidId[1]}/0.jpg`,
+                originalUrl: url
+            };
+        }
+    }
+    
     return "ERROR"; 
 }
 

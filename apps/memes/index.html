@@ -508,13 +508,16 @@ function setFilter(filter) {
     renderGallery();
 }
 
+/* =========================================
+   GALLERY RENDERER (CLICK BEHAVIOR UPDATE)
+   ========================================= */
 async function renderGallery() {
     const grid = document.getElementById('gallery');
     const search = document.getElementById('searchInput').value.toLowerCase();
     
     grid.innerHTML = '';
     
-    // Filter Logik (bleibt gleich)
+    // Filter (unverändert)
     const filtered = memes.filter(m => {
         if(currentFilter === 'FAV' && !m.isFav) return false;
         if(currentFilter !== 'ALL' && currentFilter !== 'FAV' && !m.tags.map(t=>t.toLowerCase()).includes(currentFilter)) return false;
@@ -535,58 +538,51 @@ async function renderGallery() {
         const card = document.createElement('div');
         card.className = 'meme-card fade-in';
         
-        let mediaHTML = '<div class="loader">...</div>';
-        let src = ''; 
+        let mediaHTML = '';
+        let clickAction = '';
 
-        // 1. QUELLE BESTIMMEN
+        // --- TYP 1: LOKALE DATEI (Lightbox) ---
         if (m.source === 'local') {
-            try {
-                const blob = await dbGet(m.imageId);
-                if(blob) {
-                    src = URL.createObjectURL(blob);
+            const blob = await dbGet(m.imageId);
+            if(blob) {
+                const src = URL.createObjectURL(blob);
+                if(m.mediaType === 'video') {
+                    mediaHTML = `<video src="${src}" muted onmouseover="this.play()" onmouseout="this.pause()" loop style="object-fit:cover;"></video><div class="vid-indicator">VIDEO</div>`;
+                    // Lokale Videos auch in Lightbox
+                    clickAction = `openLightbox('${m.id}', 'video', '${src}')`; 
+                } else {
+                    mediaHTML = `<img src="${src}" loading="lazy">`;
+                    clickAction = `openLightbox('${m.id}', 'image', '${src}')`;
                 }
-            } catch(e) { console.error("DB Error", e); }
-        } else {
-            src = m.url;
-        }
-
-      // 2. TYP BESTIMMEN
-        if (m.mediaType === 'video') {
-            // Check ob es ein direkter File-Link ist (mp4) oder ein Web-Link (youtube)
-            const isWebLink = !src.match(/\.(mp4|webm|mov)$/i) && !src.startsWith('blob:');
+            }
+        } 
+        // --- TYP 2: EXTERNER LINK (Neues Fenster) ---
+        else {
+            // Haben wir ein Cover gespeichert? (Youtube)
+            let poster = m.cover;
             
-            if (isWebLink) {
-                // FALLBACK DARSTELLUNG FÜR YOUTUBE/TIKTOK LINKS (die nicht runtergeladen wurden)
-                // Wir versuchen ein Thumbnail zu zeigen, wenn wir eines gespeichert haben (m.cover) oder generieren eines
-                let poster = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iIzMzMyIgZD0iTTAgMGgyNHYyNEgwVjB6Ii8+PC9zdmc+";
-                
-                // YouTube Thumbnail Trick
-                const ytMatch = src.match(/(?:shorts\/|v=|youtu\.be\/)([\w-]{11})/);
-                if(ytMatch) poster = `https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`;
-                
+            // Falls nicht, generisches Icon
+            if(!poster) {
                 mediaHTML = `
-                    <img src="${poster}" style="width:100%; height:100%; object-fit:cover; opacity:0.8;">
-                    <div class="vid-indicator" style="background:var(--accent); color:black;">🔗 STREAM</div>
-                `;
+                    <div style="width:100%; height:100%; background:#252525; display:flex; align-items:center; justify-content:center; flex-direction:column;">
+                        <div style="font-size:30px; margin-bottom:5px;">🔗</div>
+                        <div style="font-size:10px; opacity:0.7;">LINK</div>
+                    </div>`;
             } else {
-                // ECHTES VIDEO FILE (Blob oder MP4 Link)
                 mediaHTML = `
-                    <video src="${src}" loop muted autoplay playsinline 
-                           oncontextmenu="return false;"
-                           poster="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iIzMzMyIgZD0iTTAgMGgyNHYyNEgwVjB6Ii8+PC9zdmc+">
-                    </video>
-                    <div class="vid-indicator">▶ VIDEO</div>
+                    <img src="${poster}" style="object-fit:cover; opacity:0.9;">
+                    <div class="vid-indicator" style="background:var(--accent); color:black;">↗ ÖFFNEN</div>
                 `;
             }
-        } else {
-             mediaHTML = `<img src="${src}" loading="lazy" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHRleHQgeT0iMTUiIGZvbnQtc2l6ZT0iMjAiPuKAPC90ZXh0Pjwvc3ZnPg=='">`;
+            
+            // WICHTIG: Öffnet den Link in neuem Tab
+            clickAction = `window.open('${m.url}', '_blank')`;
         }
 
         card.innerHTML = `
             <div class="fav-icon" onclick="toggleFav('${m.id}')">${m.isFav ? '❤️' : '🤍'}</div>
             
-            <!-- Klick öffnet Lightbox mit korrektem Typ -->
-            <div class="meme-visual" onclick="openLightbox('${m.id}', '${m.mediaType}', '${src}')">
+            <div class="meme-visual" onclick="${clickAction}" style="cursor:pointer;">
                 ${mediaHTML}
             </div>
             
@@ -660,67 +656,47 @@ function handleFileSelect(input) {
    INPUT HANDLER (FIXED)
    ========================================= */
 /* =========================================
-   INPUT HANDLER (WITH FALLBACK)
+   SIMPLE INPUT HANDLER (NO DOWNLOADS)
    ========================================= */
-/* =========================================
-   INPUT HANDLER (FORCE LINK MODE)
-   ========================================= */
-async function handleUrlInput() {
+function handleUrlInput() {
     const inputField = document.getElementById('urlInput');
-    let url = inputField.value.trim();
+    const url = inputField.value.trim();
     if(!url) return;
     
     const cont = document.getElementById('previewContainer');
-    cont.innerHTML = '<div style="color:white; padding:20px; text-align:center;">📡 Suche Quelle...<br><span style="font-size:10px">Teste Server 1-5...</span></div>';
     cont.style.display = 'flex';
-
-    // Resolver starten
-    const result = await resolveSocialMedia(url);
     
-    // === FALL A: WIR HABEN DAS VIDEO (Download möglich) ===
-    if (result && result !== "ERROR" && !result.fallback) {
-        showToast("Video gefunden! 📥");
-        
-        if(result.desc && !document.getElementById('memeTitle').value) {
-             document.getElementById('memeTitle').value = result.desc.substring(0, 50);
-        }
-
-        tempMedia = { 
-            type: 'url', 
-            data: result.video, // Der "geknackte" Link
-            mediaType: 'video', 
-            originalUrl: inputField.value 
-        };
-        showPreview(result.video, 'video');
-    } 
-    // === FALL B: NUR LINK SPEICHERN (Fallback) ===
-    else {
-        // Das passiert, wenn YouTube alle Downloader blockiert hat.
-        // Wir speichern trotzdem!
-        console.log("Fallback Modus aktiv.");
-        showToast("Download nicht möglich - Speichere Link 🔗");
-
-        let cover = (result && result.cover) ? result.cover : null;
-
-        tempMedia = { 
-            type: 'url', 
-            data: url,          // Der Original Link
-            mediaType: 'video', 
-            isLinkOnly: true,   // WICHTIG: Sagt processMediaSave "Nicht downloaden!"
-            cover: cover
-        };
-
-        // Hübsche Anzeige statt "kaputtes Bild"
-        let bgStyle = cover ? `background: linear-gradient(rgba(0,0,0,0.5), rgba(0,0,0,0.5)), url('${cover}') center/cover;` : "";
-        
-        cont.innerHTML = `
-            <div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; border-radius:12px; ${bgStyle}">
-                <div style="font-size:40px;">🔗</div>
-                <div style="font-weight:bold; margin-top:5px;">Video verlinkt</div>
-                <div style="font-size:10px; opacity:0.8;">Wird gestreamt</div>
-            </div>
-        `;
+    // 1. YouTube Thumbnail Logik (Legal & schick)
+    const ytMatch = url.match(/(?:shorts\/|v=|youtu\.be\/)([\w-]{11})/);
+    let poster = null;
+    
+    if (ytMatch && ytMatch[1]) {
+        poster = `https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`;
     }
+
+    // 2. Vorschau generieren
+    if (poster) {
+        // Es ist YouTube -> Zeige Thumbnail
+        cont.innerHTML = `
+            <div style="width:100%; height:100%; background:url('${poster}') center/cover; display:flex; align-items:center; justify-content:center;">
+                <div style="background:rgba(0,0,0,0.7); padding:10px; border-radius:10px; font-size:30px;">▶️</div>
+            </div>`;
+    } else {
+        // Anderer Link (TikTok, Insta etc.) -> Generisches Icon
+        cont.innerHTML = `
+            <div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;">
+                <div style="font-size:40px; margin-bottom:10px;">🔗</div>
+                <div style="font-size:12px; opacity:0.8;">Externer Link</div>
+            </div>`;
+    }
+
+    // 3. Zum Speichern vorbereiten
+    tempMedia = { 
+        type: 'url', 
+        data: url, 
+        mediaType: 'video', // Wir nennen alles "Video", was ein Link ist
+        cover: poster       // Speichern wir für die Galerie
+    };
 }
    
 function showPreview(src, type) {
@@ -784,8 +760,11 @@ async function saveMeme() {
     showToast(editModeId ? "Aktualisiert! ✅" : "Gespeichert! 👾");
 }
 
+/* =========================================
+   SAVE LOGIC (CLEAN)
+   ========================================= */
 async function processMediaSave(memeObj) {
-    // FALL A: Lokaler Upload
+    // FALL A: Lokaler Upload (Bleibt wie es ist - Bilder vom Handy sind sicher)
     if (tempMedia.type === 'local') {
         const file = tempMedia.data;
         const type = file.type.startsWith('video') ? 'video' : 'image';
@@ -797,51 +776,14 @@ async function processMediaSave(memeObj) {
         memeObj.url = null;
         memeObj.mediaType = type;
     } 
-    // FALL B: URL / Link
+    // FALL B: Link speichern (Kein Download mehr)
     else {
-        const type = tempMedia.mediaType; 
-        
-        // CHECK: Haben wir schon entschieden, dass es nur ein Link sein soll?
-        if (tempMedia.isLinkOnly) {
-            console.log("Skipping download (Link Mode active)");
-            memeObj.source = 'url';
-            memeObj.url = tempMedia.data;
-            memeObj.imageId = null;
-            memeObj.mediaType = type;
-            // Cover speichern falls vorhanden (für V2 nice-to-have)
-            if(tempMedia.cover) memeObj.cover = tempMedia.cover;
-            return; // Raus hier, wir sind fertig!
-        }
-
-        // Falls nicht Link-Only, versuchen wir den Download
-        showToast("Lade herunter... ⏳", true);
-        const downloadedBlob = await downloadWithChunks(tempMedia.data);
-
-        if (downloadedBlob) {
-            // Download hat geklappt
-            const imgId = 'dl_' + Date.now();
-            const finalBlob = downloadedBlob.type ? downloadedBlob : new Blob([downloadedBlob], {type: type === 'video' ? 'video/mp4' : 'image/jpeg'});
-            
-            await dbSave(imgId, finalBlob);
-            
-            memeObj.source = 'local';
-            memeObj.imageId = imgId;
-            memeObj.url = null; 
-            memeObj.mediaType = type;
-            console.log("Erfolgreich offline gespeichert!");
-        } 
-        else {
-            // Download fehlgeschlagen -> Fallback auf Link
-            console.log("Download failed final. Link Mode.");
-            memeObj.source = 'url';
-            memeObj.url = tempMedia.data; // Hier nehmen wir tempMedia.data (was im Fall von TikTok die MP4 URL sein kann, oder Original)
-            memeObj.imageId = null;
-            memeObj.mediaType = type;
-            setTimeout(() => showToast("Nur verlinkt (Download blockiert)"), 500);
-        }
+        memeObj.source = 'url';
+        memeObj.url = tempMedia.data;
+        memeObj.cover = tempMedia.cover || null; // Thumbnail URL falls vorhanden
+        memeObj.mediaType = 'link'; // Neuer Typ für externe Links
     }
 }
-
    
 /* =========================================
    4. UTILS & ACTIONS
@@ -1265,191 +1207,6 @@ function endDrag() {
     document.getElementById('lightboxImg').style.transition = 'transform 0.1s ease-out';
 }
 
-
-/* =========================================
-   PROXY DOWNLOAD ENGINE
-   ========================================= */
-/* =========================================
-   PROXY DOWNLOAD ENGINE (UPDATED)
-   ========================================= */
-/* =========================================
-   ADVANCED DOWNLOADER (CHUNKING SUPPORT)
-   ========================================= */
-
-async function downloadWithChunks(url) {
-    const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB Chunks
-    const MAX_SIZE = 45 * 1024 * 1024;  // Max 45MB Limit (Sicherheit)
-    
-    // Proxy Liste (Priorisiert CorsProxy.io, da am stabilsten für Chunks)
-    const getProxyUrl = (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`;
-    
-    try {
-        const proxyUrl = getProxyUrl(url);
-        
-        // 1. HEAD Request: Größe prüfen & Support checken
-        const headRes = await fetch(proxyUrl, { method: 'HEAD' });
-        if (!headRes.ok) throw new Error("HEAD failed");
-        
-        const size = parseInt(headRes.headers.get('content-length') || '0');
-        const acceptsRanges = headRes.headers.get('accept-ranges') === 'bytes';
-
-        console.log(`File info: ${size} bytes, Ranges: ${acceptsRanges}`);
-
-        if (size > MAX_SIZE) throw new Error("File too large for auto-download");
-        if (size === 0) throw new Error("Size unknown, risking standard fetch");
-
-        // WENN KLEIN (< 4MB) ODER KEIN RANGE-SUPPORT -> NORMALER FETCH
-        if (size < 4 * 1024 * 1024 || !acceptsRanges) {
-            const res = await fetch(proxyUrl);
-            const blob = await res.blob();
-            return blob;
-        }
-
-        // CHUNKING LOOP
-        let received = 0;
-        const chunks = [];
-        
-        showToast("Lade Video in Teilen... 0%", true);
-
-        while (received < size) {
-            const end = Math.min(received + CHUNK_SIZE - 1, size - 1);
-            const rangeHeader = `bytes=${received}-${end}`;
-            
-            // Fetch Chunk
-            const chunkRes = await fetch(proxyUrl, {
-                headers: { 'Range': rangeHeader }
-            });
-
-            if (!chunkRes.ok && chunkRes.status !== 206) {
-                // Falls Proxy Range ignoriert und alles schickt (Status 200)
-                if (received === 0 && chunkRes.status === 200) {
-                     console.log("Proxy ignored range, downloading full...");
-                     const blob = await chunkRes.blob();
-                     return blob;
-                }
-                throw new Error("Chunk failed: " + chunkRes.status);
-            }
-
-            const chunkBlob = await chunkRes.blob();
-            chunks.push(chunkBlob);
-            received += chunkBlob.size;
-
-            // Fortschritt anzeigen
-            const percent = Math.round((received / size) * 100);
-            showToast(`Lade Video... ${percent}%`, true);
-        }
-
-        // Zusammensetzen
-        showToast("Verarbeite... 💾", true);
-        return new Blob(chunks, { type: 'video/mp4' }); // Wir nehmen an es ist mp4, oder lesen Type aus Header
-
-    } catch (e) {
-        console.warn("Download Error:", e);
-        return null; // Fallback Trigger
-    }
-}
-
-   /* =========================================
-   SOCIAL MEDIA RESOLVER (TikTok, Insta, etc.)
-   ========================================= */
-/* =========================================
-   SOCIAL MEDIA RESOLVER (FIXED V2)
-   ========================================= */
-/* =========================================
-   SOCIAL MEDIA RESOLVER (MULTI-MIRROR V3)
-   ========================================= */
-/* =========================================
-   SOCIAL MEDIA RESOLVER (AGGRESSIVE MODE)
-   ========================================= */
-async function resolveSocialMedia(url) {
-    // Check ob unterstützte Plattform
-    const patterns = [/tiktok\.com/, /instagram\.com/, /twitter\.com/, /x\.com/, /youtube\.com/, /youtu\.be/, /reddit\.com/];
-    if (!patterns.some(r => r.test(url))) return null; 
-
-    showToast("🔍 Suche Download-Quelle...", true);
-
-    // === DIE LISTE DER DOWNLOAD-SERVER ===
-    // Das sind öffentliche Instanzen, die im Hintergrund das Video ziehen
-    const apis = [
-        // 1. Cobalt Instanz A (Oft sehr gut)
-        { url: "https://co.wuk.sh/api/json", type: "cobalt" },
-        // 2. Cobalt Instanz B (Backup)
-        { url: "https://api.cobalt.tools/api/json", type: "cobalt" },
-        // 3. Cobalt Instanz C (Backup)
-        { url: "https://cobalt.xyzen.dev/api/json", type: "cobalt" },
-        // 4. Server Social (Weiteres Backup)
-        { url: "https://api.server.social/api/json", type: "cobalt" },
-        // 5. TikWM (Nur für TikTok, aber extrem stabil)
-        { url: "https://www.tikwm.com/api/", type: "tikwm" }
-    ];
-
-    // Wir probieren alle nacheinander durch
-    for (const api of apis) {
-        try {
-            // TikTok Spezial-Behandlung
-            if (api.type === "tikwm") {
-                if (!url.includes("tiktok")) continue; // Überspringen wenn kein TikTok
-                
-                // TikWM braucht einen Proxy wegen CORS
-                const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(api.url + '?url=' + url + '&hd=1')}`;
-                const res = await fetch(proxy);
-                const raw = await res.json();
-                const data = JSON.parse(raw.contents);
-                
-                if (data.code === 0 && data.data) {
-                    console.log("Treffer bei TikWM!");
-                    return { video: data.data.play, cover: data.data.cover, desc: data.data.title };
-                }
-            }
-            
-            // Standard Cobalt API (YouTube, Insta, Twitter, TikTok)
-            else if (api.type === "cobalt") {
-                console.log("Teste Server:", api.url);
-                
-                const res = await fetch(api.url, {
-                    method: 'POST',
-                    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        url: url, 
-                        vCodec: 'h264', // Wichtig für WhatsApp/Handy Kompatibilität
-                        filenamePattern: 'basic'
-                    })
-                });
-                
-                const data = await res.json();
-                
-                // Check ob Erfolg
-                if (data.status === 'stream' || data.status === 'redirect') {
-                    console.log("Treffer bei:", api.url);
-                    return { video: data.url, cover: null, desc: null };
-                }
-                if (data.status === 'picker') {
-                    return { video: data.picker[0].url, cover: data.picker[0].thumb, desc: null };
-                }
-            }
-            
-        } catch (e) {
-            console.warn("Server fehlgeschlagen:", api.url);
-            // Einfach weitermachen zum nächsten Server
-        }
-    }
-
-    // === FALLBACK: YOUTUBE THUMBNAIL ===
-    // Wenn KEINER der Server das Video liefern wollte (YouTube blockt stark),
-    // geben wir zumindest Infos zurück, damit der "Link Modus" gut aussieht.
-    if (url.includes("youtube") || url.includes("youtu.be")) {
-        const vidId = url.match(/(?:shorts\/|v=|youtu\.be\/)([\w-]{11})/);
-        if (vidId && vidId[1]) {
-            return { 
-                fallback: true, 
-                cover: `https://img.youtube.com/vi/${vidId[1]}/hqdefault.jpg`,
-                desc: "YouTube Video"
-            };
-        }
-    }
-
-    return "ERROR"; // Nichts zu machen
-}
 
    
 // Start

@@ -318,18 +318,6 @@ button {
     font-weight: bold; border: 1px solid transparent;
 }
 .share-opt-btn:active { background: var(--accent); color: black; }
-/* Update für .meme-visual: Videos sollen die Box füllen */
-.meme-visual img, .meme-visual video {
-    width: 100%; height: 100%; display: block; object-fit: cover;
-}
-
-/* Optional: Ein kleines Icon im Grid, damit man sieht, dass es ein Video ist */
-.vid-indicator {
-    position: absolute; bottom: 5px; right: 5px;
-    background: rgba(0,0,0,0.6); color: #fff;
-    padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold;
-    pointer-events: none; /* Klicks gehen durch */
-}
    
 </style>
 </head>
@@ -379,9 +367,8 @@ button {
         <!-- UPLOAD SECTION -->
         <div id="sectionUpload">
             <button class="btn-sec" onclick="document.getElementById('fileInput').click()">Datei wählen 🖼️</button>
-        <!-- Jetzt für Bilder UND Videos -->
-<input type="file" id="fileInput" hidden accept="image/*,video/*" onchange="handleFileSelect(this)">
-           </div>
+            <input type="file" id="fileInput" hidden accept="image/*" onchange="handleFileSelect(this)">
+        </div>
 
         <!-- LINK SECTION -->
         <div id="sectionLink" class="hidden">
@@ -508,16 +495,12 @@ function setFilter(filter) {
     renderGallery();
 }
 
-/* =========================================
-   GALLERY RENDERER (CLICK BEHAVIOR UPDATE)
-   ========================================= */
 async function renderGallery() {
     const grid = document.getElementById('gallery');
     const search = document.getElementById('searchInput').value.toLowerCase();
     
     grid.innerHTML = '';
     
-    // Filter (unverändert)
     const filtered = memes.filter(m => {
         if(currentFilter === 'FAV' && !m.isFav) return false;
         if(currentFilter !== 'ALL' && currentFilter !== 'FAV' && !m.tags.map(t=>t.toLowerCase()).includes(currentFilter)) return false;
@@ -538,54 +521,38 @@ async function renderGallery() {
         const card = document.createElement('div');
         card.className = 'meme-card fade-in';
         
-        let mediaHTML = '';
-        let clickAction = '';
+        let mediaHTML = '<div class="loader">...</div>';
+        let src = ''; // Wir brauchen die Source für die Lightbox
 
-        // --- TYP 1: LOKALE DATEI (Lightbox) ---
+        // Lokales Bild laden
         if (m.source === 'local') {
             const blob = await dbGet(m.imageId);
             if(blob) {
-                const src = URL.createObjectURL(blob);
-                if(m.mediaType === 'video') {
-                    mediaHTML = `<video src="${src}" muted onmouseover="this.play()" onmouseout="this.pause()" loop style="object-fit:cover;"></video><div class="vid-indicator">VIDEO</div>`;
-                    // Lokale Videos auch in Lightbox
-                    clickAction = `openLightbox('${m.id}', 'video', '${src}')`; 
-                } else {
-                    mediaHTML = `<img src="${src}" loading="lazy">`;
-                    clickAction = `openLightbox('${m.id}', 'image', '${src}')`;
-                }
+                src = URL.createObjectURL(blob);
+                mediaHTML = `<img src="${src}" loading="lazy">`;
             }
         } 
-        // --- TYP 2: EXTERNER LINK (Neues Fenster) ---
-        else {
-            // Haben wir ein Cover gespeichert? (Youtube)
-            let poster = m.cover;
-            
-            // Falls nicht, generisches Icon
-            if(!poster) {
-                mediaHTML = `
-                    <div style="width:100%; height:100%; background:#252525; display:flex; align-items:center; justify-content:center; flex-direction:column;">
-                        <div style="font-size:30px; margin-bottom:5px;">🔗</div>
-                        <div style="font-size:10px; opacity:0.7;">LINK</div>
-                    </div>`;
+        // URL laden
+        else if (m.source === 'url') {
+            src = m.url;
+            if (m.mediaType === 'video') {
+                // Videos spielen direkt im Grid, kein Zoom nötig aber Fullscreen möglich
+                mediaHTML = `<video src="${src}" loop muted autoplay playsinline></video>`;
             } else {
-                mediaHTML = `
-                    <img src="${poster}" style="object-fit:cover; opacity:0.9;">
-                    <div class="vid-indicator" style="background:var(--accent); color:black;">↗ ÖFFNEN</div>
-                `;
+                mediaHTML = `<img src="${src}" loading="lazy" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHRleHQgeT0iMTUiIGZvbnQtc2l6ZT0iMjAiPuKAPC90ZXh0Pjwvc3ZnPg=='">`;
             }
-            
-            // WICHTIG: Öffnet den Link in neuem Tab
-            clickAction = `window.open('${m.url}', '_blank')`;
         }
 
+        // HTML ZUSAMMENBAUEN
+        // Wichtig: onclick="openLightbox(...)" statt openEdit
         card.innerHTML = `
             <div class="fav-icon" onclick="toggleFav('${m.id}')">${m.isFav ? '❤️' : '🤍'}</div>
             
-            <div class="meme-visual" onclick="${clickAction}" style="cursor:pointer;">
+            <div class="meme-visual" onclick="openLightbox('${m.id}', '${m.mediaType||'image'}', '${src}')">
                 ${mediaHTML}
             </div>
             
+            <!-- NEU: Kontext Menü Button -->
             <div class="menu-btn" onclick="openMenu(event, '${m.id}')">⋮</div>
 
             <div class="meme-info">
@@ -596,7 +563,6 @@ async function renderGallery() {
         grid.appendChild(card);
     }
 }
-   
 /* =========================================
    3. ADD / SAVE LOGIC
    ========================================= */
@@ -652,53 +618,24 @@ function handleFileSelect(input) {
     }
 }
 
-/* =========================================
-   INPUT HANDLER (FIXED)
-   ========================================= */
-/* =========================================
-   SIMPLE INPUT HANDLER (NO DOWNLOADS)
-   ========================================= */
 function handleUrlInput() {
-    const inputField = document.getElementById('urlInput');
-    const url = inputField.value.trim();
+    const url = document.getElementById('urlInput').value.trim();
     if(!url) return;
     
-    const cont = document.getElementById('previewContainer');
-    cont.style.display = 'flex';
+    // Check Media Type
+    const isVideo = url.match(/\.(mp4|webm|mov)$/i);
+    const mediaType = isVideo ? 'video' : 'image';
     
-    // 1. YouTube Thumbnail Logik (Legal & schick)
-    const ytMatch = url.match(/(?:shorts\/|v=|youtu\.be\/)([\w-]{11})/);
-    let poster = null;
+    // CORS CHECK & HYBRID LOGIC
+    // Wir versuchen hier NICHT das Bild runterzuladen, da wir das in der 
+    // Tier-App Diskussion als Problem identifiziert haben.
+    // Bei Memes (GIFs/Videos) ist Speichern von URL extrem schwierig.
+    // Wir setzen direkt auf den Link-Modus.
     
-    if (ytMatch && ytMatch[1]) {
-        poster = `https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`;
-    }
-
-    // 2. Vorschau generieren
-    if (poster) {
-        // Es ist YouTube -> Zeige Thumbnail
-        cont.innerHTML = `
-            <div style="width:100%; height:100%; background:url('${poster}') center/cover; display:flex; align-items:center; justify-content:center;">
-                <div style="background:rgba(0,0,0,0.7); padding:10px; border-radius:10px; font-size:30px;">▶️</div>
-            </div>`;
-    } else {
-        // Anderer Link (TikTok, Insta etc.) -> Generisches Icon
-        cont.innerHTML = `
-            <div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;">
-                <div style="font-size:40px; margin-bottom:10px;">🔗</div>
-                <div style="font-size:12px; opacity:0.8;">Externer Link</div>
-            </div>`;
-    }
-
-    // 3. Zum Speichern vorbereiten
-    tempMedia = { 
-        type: 'url', 
-        data: url, 
-        mediaType: 'video', // Wir nennen alles "Video", was ein Link ist
-        cover: poster       // Speichern wir für die Galerie
-    };
+    tempMedia = { type: 'url', data: url, mediaType: mediaType };
+    showPreview(url, mediaType);
 }
-   
+
 function showPreview(src, type) {
     const cont = document.getElementById('previewContainer');
     cont.innerHTML = ''; // Reset
@@ -760,30 +697,49 @@ async function saveMeme() {
     showToast(editModeId ? "Aktualisiert! ✅" : "Gespeichert! 👾");
 }
 
-/* =========================================
-   SAVE LOGIC (CLEAN)
-   ========================================= */
 async function processMediaSave(memeObj) {
-    // FALL A: Lokaler Upload (Bleibt wie es ist - Bilder vom Handy sind sicher)
+    // FALL A: Lokaler Upload (Datei vom Handy)
     if (tempMedia.type === 'local') {
-        const file = tempMedia.data;
-        const type = file.type.startsWith('video') ? 'video' : 'image';
-        const imgId = 'file_' + Date.now();
-        await dbSave(imgId, file);
-        
+        const imgId = 'img_' + Date.now();
+        await dbSave(imgId, tempMedia.data);
         memeObj.source = 'local';
         memeObj.imageId = imgId;
         memeObj.url = null;
-        memeObj.mediaType = type;
+        memeObj.mediaType = tempMedia.data.type.startsWith('video') ? 'video' : 'image';
     } 
-    // FALL B: Link speichern (Kein Download mehr)
+    // FALL B: URL (Versuch Download via Proxy)
     else {
-        memeObj.source = 'url';
-        memeObj.url = tempMedia.data;
-        memeObj.cover = tempMedia.cover || null; // Thumbnail URL falls vorhanden
-        memeObj.mediaType = 'link'; // Neuer Typ für externe Links
+        showToast("Lade herunter... ⏳", true); // Feedback geben
+        
+        // Versuch: Über Proxy ziehen
+        const downloadedBlob = await downloadWithProxies(tempMedia.data);
+
+        if (downloadedBlob) {
+            // HURRA! Es hat geklappt -> Wir speichern es wie ein lokales Bild!
+            const imgId = 'img_' + Date.now();
+            await dbSave(imgId, downloadedBlob);
+            
+            memeObj.source = 'local'; // Wir tun so, als wäre es lokal
+            memeObj.imageId = imgId;
+            memeObj.url = null; // URL brauchen wir nicht mehr zwingend
+            // Typ bestimmen
+            memeObj.mediaType = downloadedBlob.type.startsWith('video') ? 'video' : 'image';
+            console.log("Erfolgreich via Proxy gespeichert!");
+        } 
+        else {
+            // FEHLSCHLAG: Fallback auf Link-Modus
+            console.log("Download failed. Fallback to Link Mode.");
+            memeObj.source = 'url';
+            memeObj.url = tempMedia.data;
+            memeObj.imageId = null;
+            memeObj.mediaType = tempMedia.mediaType;
+            
+            // User kurz informieren, dass es "nur" ein Link geworden ist
+            setTimeout(() => showToast("Nur verlinkt (Download blockiert)"), 500);
+        }
     }
 }
+
    
 /* =========================================
    4. UTILS & ACTIONS
@@ -1207,6 +1163,52 @@ function endDrag() {
     document.getElementById('lightboxImg').style.transition = 'transform 0.1s ease-out';
 }
 
+
+/* =========================================
+   PROXY DOWNLOAD ENGINE
+   ========================================= */
+/* =========================================
+   PROXY DOWNLOAD ENGINE (UPDATED)
+   ========================================= */
+async function downloadWithProxies(url) {
+    const proxies = [
+        // 1. CorsProxy.io (Explizit mit 'url=' Parameter)
+        (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+        
+        // 2. CorsFix (Neu aufgenommen)
+        (u) => `https://proxy.corsfix.com/?${encodeURIComponent(u)}`,
+        
+        // 3. CodeTabs (Stabiler Fallback)
+        (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+        
+        // 4. AllOrigins (Letzter Versuch)
+        (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`
+    ];
+
+    for (let proxyGen of proxies) {
+        try {
+            const proxyUrl = proxyGen(url);
+            console.log("Versuche Proxy:", proxyUrl);
+            
+            const res = await fetch(proxyUrl);
+            if (!res.ok) throw new Error("Status " + res.status);
+            
+            const blob = await res.blob();
+            
+            // WICHTIG: Prüfen ob wir wirklich ein Bild/Video haben und keine HTML-Fehlerseite
+            if (blob.type.includes('text') || blob.type.includes('html')) {
+                throw new Error("Proxy lieferte HTML statt Bild");
+            }
+            if (blob.size < 500) throw new Error("Datei zu klein (wahrscheinlich Fehler)");
+            
+            return blob; // Erfolg!
+        } catch (e) {
+            console.warn("Proxy fehlgeschlagen:", e.message);
+            // Loop läuft weiter zum nächsten Proxy
+        }
+    }
+    return null; // Alle gescheitert
+}
 
    
 // Start

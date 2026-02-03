@@ -15,6 +15,10 @@
 <!-- LEAFLET MAP CSS -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
 
+<!-- CROPPER.JS -->
+<link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+   
 <!-- Google Font: Fredoka (Rund & Verspielt) -->
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;700&display=swap" rel="stylesheet">
 
@@ -4927,6 +4931,41 @@ body.dark .deck-card {
     to { opacity: 1; transform: translateY(0) scale(1); } 
 }
 
+/* === CROPPER MODAL === */
+.crop-container {
+    height: 60vh; /* Platz für das Bild */
+    background: #000;
+    overflow: hidden;
+    position: relative;
+    border-radius: 12px;
+}
+
+#cropImage {
+    max-width: 100%;
+    display: block;
+}
+
+.crop-toolbar {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    margin-top: 15px;
+}
+
+.crop-btn {
+    background: var(--card);
+    border: 1px solid var(--btn);
+    color: var(--text);
+    width: 50px; height: 50px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px; cursor: pointer;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+}
+.crop-btn:active { transform: scale(0.9); }
+.crop-btn.save { background: var(--accent); color: white; border: none; }
+   
+   
 </style>
 </head>
 <body>
@@ -5813,10 +5852,9 @@ body.dark .deck-card {
     <img id="lightboxImg" src="" alt="Großansicht">
 </div>
 
+
 <!-- LEAFLET JS -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-
-
 
 
 <!-- === INFO MODAL (ULTIMATE EDITION) === -->
@@ -6255,7 +6293,27 @@ Klicke auf ein Tier in der Liste oder auf eine Kachel um das Tier zu bearbeiten 
     </div>
 </div>
 
+   <!-- CROPPER MODAL -->
+<div id="cropModal" class="modal" style="z-index: 25000;">
+    <div class="modal-content" style="max-width: 500px;">
+        <div class="close-btn" onclick="closeCropper()">✕</div>
+        <h3>✂️ Bild anpassen</h3>
+        
+        <div class="crop-container">
+            <img id="cropImage" src="">
+        </div>
+
+        <div class="crop-toolbar">
+            <button class="crop-btn" onclick="rotateCropper(-90)">↺</button>
+            <button class="crop-btn" onclick="rotateCropper(90)">↻</button>
+            <button class="crop-btn save" onclick="saveCroppedImage()">✓</button>
+        </div>
+    </div>
+</div>
+
 <script>
+
+   
 
 async function openStorageExplorer() {
     const grid = getEl('storageGrid');
@@ -7564,15 +7622,16 @@ async function addAnimal(){
     showErrorToast("Tier angelegt!", true);
 }
 
+// Ersetzt die alte handleImageUpload Funktion
 function handleImageUpload(input){
     if(input.files && input.files[0]){
-        const reader = new FileReader();
-        reader.onload = e => resizeImage(e.target.result, 800, res => { // Max 800px width
-            currentTempImg = res;
-            getEl('previewEl').src = res;
-            getEl('imgPreview').style.display='block';
+        // Ruft den Cropper auf und übergibt eine Callback-Funktion
+        openCropper(input.files[0], (croppedBase64) => {
+            currentTempImg = croppedBase64;
+            document.getElementById('previewEl').src = croppedBase64;
+            document.getElementById('imgPreview').style.display = 'block';
+            input.value = ''; // Input resetten
         });
-        reader.readAsDataURL(input.files[0]);
     }
 }
 function clearImage(){ currentTempImg=null; getEl('imgPreview').style.display='none'; }
@@ -9074,12 +9133,15 @@ async function openIconEdit(i){
 }
 
 
-
+// Ersetzt die alte handleEditFile Funktion
 function handleEditFile(input){
-    if(input.files[0]) {
-        const reader = new FileReader();
-        reader.onload = e => resizeImage(e.target.result, 800, res => { editIconTemp = res; getEl('editPreviewImg').src = res; getEl('editPreviewContainer').style.display='block'; });
-        reader.readAsDataURL(input.files[0]);
+    if(input.files && input.files[0]) {
+        openCropper(input.files[0], (croppedBase64) => {
+            editIconTemp = croppedBase64;
+            document.getElementById('editPreviewImg').src = croppedBase64;
+            document.getElementById('editPreviewContainer').style.display = 'block';
+            input.value = ''; // Input resetten
+        });
     }
 }
 async function removeEditImage(){ editIconTemp = 'DELETE'; getEl('editPreviewContainer').style.display='none'; }
@@ -10961,14 +11023,14 @@ function findDateInHeader(file) {
 }
 
 // 2. Die Upload Funktion
+// Ersetzt die alte handleNoteImgUpload Funktion
 async function handleNoteImgUpload(input) {
     if(input.files && input.files[0]){
         const file = input.files[0];
         
-        // A) Versuch: Echter Scan im Datei-Header
+        // 1. Datum im Original suchen (bevor wir croppen/komprimieren)
         let detectedDate = await findDateInHeader(file);
         
-        // B) Fallback: Datei-Metadaten (nur wenn nicht "Heute")
         if (!detectedDate) {
             const modDate = new Date(file.lastModified);
             const todayStr = new Date().toDateString();
@@ -10977,18 +11039,14 @@ async function handleNoteImgUpload(input) {
             }
         }
 
-        // Ergebnis verarbeiten
+        // Datum Logik anwenden
         if (detectedDate) {
             const today = new Date();
-            // Ist das gefundene Datum ungleich Heute?
-            // (Toleranz: Wir ignorieren die Uhrzeit für den "Ist es heute?" Check)
             if (detectedDate.toDateString() !== today.toDateString()) {
-                
                 const dispDate = detectedDate.toLocaleDateString();
                 const dispTime = detectedDate.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
                 
                 if(confirm(`📅 Aufnahmedatum gefunden: ${dispDate} (${dispTime})\n\nSoll die Sichtung auf diesen Zeitpunkt datiert werden?`)) {
-                    
                     const yyyy = detectedDate.getFullYear();
                     const mm = String(detectedDate.getMonth() + 1).padStart(2, '0');
                     const dd = String(detectedDate.getDate()).padStart(2, '0');
@@ -10998,29 +11056,20 @@ async function handleNoteImgUpload(input) {
                     
                     if(dEl) dEl.value = `${yyyy}-${mm}-${dd}`;
                     if(tEl) tEl.value = dispTime;
-                    
                     showErrorToast(`Datum auf ${dispDate} gesetzt`, true);
                 }
-            } else {
-                // Debugging für dich: Falls er doch "Heute" findet
-                console.log("Datum im Bild gefunden, aber es ist von heute.");
             }
-        } else {
-            console.log("Kein Datum im Bild-Header gefunden.");
         }
 
-        // Bild anzeigen
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            resizeImage(e.target.result, 1280, function(res) { 
-                currentNoteImg = res;
-                const imgEl = document.getElementById('noteImgEl');
-                const box = document.getElementById('noteImgPreviewBox');
-                if(imgEl) imgEl.src = res;
-                if(box) box.style.display = 'block';
-            }, 0.7); 
-        };
-        reader.readAsDataURL(file);
+        // 2. Cropper öffnen
+        openCropper(file, (croppedBase64) => {
+            currentNoteImg = croppedBase64;
+            const imgEl = document.getElementById('noteImgEl');
+            const box = document.getElementById('noteImgPreviewBox');
+            if(imgEl) imgEl.src = croppedBase64;
+            if(box) box.style.display = 'block';
+            input.value = ''; // Reset
+        });
     }
 }
 
@@ -13447,6 +13496,77 @@ function updateMicroUI() {
     document.querySelectorAll('.mm-item').forEach(el => el.classList.remove('selected'));
     // (Hier könnte man noch spezifische Klassen pro Item setzen, 
     // aber das Feedback im Button reicht meistens aus)
+}
+
+   /* === CROPPER ENGINE === */
+let cropperInstance = null;
+let cropCallback = null; // Speichert, was nach dem Speichern passieren soll
+
+function openCropper(file, callback) {
+    if(!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const img = document.getElementById('cropImage');
+        img.src = e.target.result;
+        
+        const modal = document.getElementById('cropModal');
+        modal.style.display = 'block';
+
+        // Alten Cropper zerstören falls vorhanden
+        if (cropperInstance) {
+            cropperInstance.destroy();
+        }
+
+        // Cropper starten
+        cropperInstance = new Cropper(img, {
+            viewMode: 1,
+            dragMode: 'move',
+            autoCropArea: 1,
+            restore: false,
+            guides: true,
+            center: true,
+            highlight: false,
+            cropBoxMovable: true,
+            cropBoxResizable: true,
+            toggleDragModeOnDblclick: false,
+        });
+
+        cropCallback = callback;
+    };
+    reader.readAsDataURL(file);
+}
+
+function rotateCropper(deg) {
+    if(cropperInstance) cropperInstance.rotate(deg);
+}
+
+function closeCropper() {
+    document.getElementById('cropModal').style.display = 'none';
+    if (cropperInstance) {
+        cropperInstance.destroy();
+        cropperInstance = null;
+    }
+    document.getElementById('cropImage').src = "";
+}
+
+function saveCroppedImage() {
+    if (!cropperInstance) return;
+
+    // Bild als Canvas holen
+    const canvas = cropperInstance.getCroppedCanvas({
+        maxWidth: 1024,
+        maxHeight: 1024,
+        fillColor: '#fff',
+        imageSmoothingEnabled: true,
+        imageSmoothingQuality: 'high',
+    });
+
+    // In Base64 umwandeln und Callback feuern
+    const base64 = canvas.toDataURL('image/jpeg', 0.85); // 85% Qualität
+    
+    if (cropCallback) cropCallback(base64);
+    closeCropper();
 }
 
 // Start-Check

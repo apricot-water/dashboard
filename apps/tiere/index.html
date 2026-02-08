@@ -13047,7 +13047,8 @@ function importBackup(e){
 }
 
  
-async function confirmImport(mode) {
+
+   async function confirmImport(mode) {
     getEl('importModal').style.display = 'none';
     if (mode === 'cancel') return;
 
@@ -13057,7 +13058,7 @@ async function confirmImport(mode) {
 
         // --- 1. VORBEREITUNG (Nur bei Overwrite) ---
         if (mode === 'overwrite') {
-            // A) SYNC KANÄLE RETTEN! (Wichtig!)
+            // A) SYNC KANÄLE RETTEN!
             const savedChannels = localStorage.getItem('tier_sync_channels');
             const savedActiveId = localStorage.getItem('tier_active_sync_id');
 
@@ -13068,13 +13069,11 @@ async function confirmImport(mode) {
             if(savedChannels) localStorage.setItem('tier_sync_channels', savedChannels);
             if(savedActiveId) localStorage.setItem('tier_active_sync_id', savedActiveId);
             
-            // Globale Variablen im Speicher aktualisieren, damit die App nicht crasht
             syncChannels = savedChannels ? JSON.parse(savedChannels) : [];
             activeSyncId = savedActiveId || null;
 
-            // D) DATENBANKEN LEEREN (Bilder, Funk, Decks)
+            // D) DATENBANKEN LEEREN
             const db = await dbPromise;
-            // Wichtig: Wir warten (await) auf den Abschluss!
             const txImg = db.transaction(STORE_IMGS, 'readwrite');
             await txImg.objectStore(STORE_IMGS).clear();
             await new Promise(r => { txImg.oncomplete = r; txImg.onerror = r; });
@@ -13083,7 +13082,6 @@ async function confirmImport(mode) {
             await txDeck.objectStore(STORE_DECKS).clear();
             await new Promise(r => { txDeck.oncomplete = r; txDeck.onerror = r; });
             
-            // Funk DB leeren
             try {
                 const rfDb = await rfDbPromise;
                 const txRf = rfDb.transaction(RF_STORE, 'readwrite');
@@ -13093,23 +13091,20 @@ async function confirmImport(mode) {
         }
 
         // --- 2. DB INHALTE WIEDERHERSTELLEN ---
-        // Bilder importieren
         if (d.images) {
             for (let [id, data] of Object.entries(d.images)) await dbSaveImg(id, data);
         }
-        // Ranger Funk Messages
         if (d.rfMessages) {
             const rfStore = (await rfDbPromise).transaction(RF_STORE, 'readwrite').objectStore(RF_STORE);
             for (let m of d.rfMessages) await rfStore.put(m);
         }
-        // Decks
         if (d.customDecks) {
             for (let deck of d.customDecks) await dbSaveDeck(deck);
         }
 
         // --- 3. LOCALSTORAGE DATEN ---
         if (mode === 'overwrite') {
-            // Alles überschreiben (außer Sync Kanäle, die sind schon da)
+            // Alles überschreiben
             animals = d.animals || [];
             locations = d.locations || [];
             locCoords = d.locCoords || {};
@@ -13119,16 +13114,15 @@ async function confirmImport(mode) {
             userFlavorTags = d.userFlavorTags || [];
             trashBin = []; 
 
-            // Historie schreiben
             if (d.fullHistory) {
                 Object.entries(d.fullHistory).forEach(([y, h]) => saveHistory(y, h));
             }
-
-            // Configs
             localStorage.setItem('activeDeckIDs', JSON.stringify(d.activeDeckIDs || ['builtin']));
             
         } else {
-            // --- MERGE MODE (Wie gehabt) ---
+            // --- MERGE MODE (INTELLIGENT) ---
+            
+            // Stammdaten ergänzen
             d.animals?.forEach(impA => {
                 if (!animals.some(a => a.name === impA.name)) animals.push(impA);
             });
@@ -13141,34 +13135,53 @@ async function confirmImport(mode) {
             d.rfChannels?.forEach(ch => {
                 if (!rfChannels.some(local => local.topic === ch.topic)) rfChannels.push(ch);
             });
-            
-            // Sync Channels mergen (falls im Backup welche waren - optional)
             if(d.syncChannels && Array.isArray(d.syncChannels)) {
                 d.syncChannels.forEach(ch => {
                     if (!syncChannels.some(local => local.topic === ch.topic)) syncChannels.push(ch);
                 });
             }
 
-            // Historie mergen
+            // Historie intelligent mergen
             if (d.fullHistory) {
                 for (let yearData of Object.values(d.fullHistory)) {
                     for (let [dateStr, dayContent] of Object.entries(yearData)) {
                         if (dayContent.perAnimal) {
                             for (let [idxStr, list] of Object.entries(dayContent.perAnimal)) {
                                 let targetIdx = parseInt(idxStr);
+                                
+                                // Index mappen (Falls Tiernamen-Index abweicht)
                                 if (d.animals && d.animals[idxStr]) {
                                     const impName = d.animals[idxStr].name;
                                     const localIdx = animals.findIndex(a => a.name === impName);
                                     if (localIdx !== -1) targetIdx = localIdx;
                                 }
+
+                                // === HIER IST DIE GEWÜNSCHTE ÄNDERUNG ===
                                 for (let item of list) {
                                     const y = dateStr.split('-')[0];
                                     const h = getHistory(y);
-                                    let exists = h[dateStr]?.perAnimal?.[targetIdx]?.some(ex => 
-                                        ex.time === item.time && ex.location === item.location
-                                    );
+                                    
+                                    // Wir prüfen im lokalen Bestand (h), ob es diesen Eintrag schon gibt
+                                    let exists = h[dateStr]?.perAnimal?.[targetIdx]?.some(ex => {
+                                        
+                                        // FALL A: Notiz vorhanden? -> Text Vergleich (Ort/Zeit egal!)
+                                        if (item.note && ex.note) {
+                                            return item.note.trim() === ex.note.trim();
+                                        }
+                                        
+                                        // FALL B: Keine Notiz bei beiden? -> Zeit Vergleich (damit Zähl-Klicks nicht verschwinden)
+                                        if (!item.note && !ex.note) {
+                                            return item.time === ex.time;
+                                        }
+                                        
+                                        // FALL C: Einer hat Notiz, einer nicht -> Sind unterschiedlich
+                                        return false;
+                                    });
+
+                                    // Nur schreiben, wenn es noch nicht existiert
                                     if (!exists) writeEntry(dateStr, targetIdx, item);
                                 }
+                                // === ENDE ÄNDERUNG ===
                             }
                         }
                     }
@@ -13179,7 +13192,6 @@ async function confirmImport(mode) {
         // --- 4. FINALE SPEICHERUNG ---
         saveGlobals();
         localStorage.setItem('ranger_channels', JSON.stringify(rfChannels));
-        // WICHTIG: Sync Channels auch wieder speichern (falls Merge neue gebracht hat)
         localStorage.setItem('tier_sync_channels', JSON.stringify(syncChannels));
         localStorage.setItem('userFlavorTags', JSON.stringify(userFlavorTags));
         localStorage.setItem('savedFacts', JSON.stringify(savedFacts));

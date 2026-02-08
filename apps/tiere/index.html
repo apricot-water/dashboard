@@ -12725,7 +12725,7 @@ async function startCloudPush() {
         document.getElementById('syncTitle').innerText = "Hochladen...";
         bar.style.width = "1%";
 
-        // 1. JSON holen
+        // 1. JSON holen & Packen
         status.innerText = "Packe Daten...";
         await new Promise(r => setTimeout(r, 100));
         let payloadString = await getFullBackupString(true); 
@@ -12733,20 +12733,20 @@ async function startCloudPush() {
         // --- VERSCHLÜSSELUNG ---
         let isEncrypted = false;
         if(ch.password) {
-            status.innerText = "🔒 Verschlüssele...";
+            status.innerText = "🔒 Verschlüssele Daten...";
             await new Promise(r => setTimeout(r, 100)); 
             payloadString = await encryptText(payloadString, ch.password);
             isEncrypted = true;
         }
 
-        // 2. Chunking (1 MB - sicher für ntfy)
-        const CHUNK_SIZE = 1024 * 1024; 
+        // 2. Chunking (Sicherheitshalber auf 1 MB reduziert)
+        const CHUNK_SIZE = 1.0 * 1024 * 1024; 
         const totalChunks = Math.ceil(payloadString.length / CHUNK_SIZE);
         const backupID = 'bkp_' + Date.now(); 
         
-        console.log(`[UPLOAD] ID: ${backupID}, Größe: ${payloadString.length}, Chunks: ${totalChunks}`);
+        console.log(`[UPLOAD] Starte Upload. Größe: ${payloadString.length}, Chunks: ${totalChunks}`);
 
-        // 3. Header senden (Kleine Text-Nachricht)
+        // 3. Header senden (Das ist eine normale Nachricht)
         const headerPayload = {
             type: 'tier_sync_header',
             id: backupID,
@@ -12758,63 +12758,60 @@ async function startCloudPush() {
             encrypted: isEncrypted
         };
         
-        // Header senden
-        await fetch(`https://ntfy.sh/${ch.topic}`, {
+        const headRes = await fetch(`https://ntfy.sh/${ch.topic}`, {
             method: 'PUT', 
             body: JSON.stringify(headerPayload),
-            headers: { 'Title': 'TierTicker Sync Header', 'Priority': 'high' }
+            headers: { 
+                'Title': 'TierTicker Sync Header', 
+                'Priority': 'high', 
+                'Content-Type': 'text/plain' 
+            }
         });
 
-        // 4. Chunks senden (Als BLOB/DATEI!)
+        if(!headRes.ok) throw new Error("Header konnte nicht gesendet werden (Rate Limit?)");
+
+        // 4. Chunks senden (Als DATEIEN markiert!)
         for (let i = 0; i < totalChunks; i++) {
-            if(abortSyncFlag) throw new Error("Abbruch");
+            if(abortSyncFlag) throw new Error("Abbruch durch User");
 
             const start = i * CHUNK_SIZE;
             const end = start + CHUNK_SIZE;
-            const chunkString = payloadString.substring(start, end);
+            const chunkData = payloadString.substring(start, end);
             
-            // === WICHTIGSTER FIX: String in Blob umwandeln ===
-            // Das zwingt den Browser, es als Datei-Upload zu senden!
-            const fileBlob = new Blob([chunkString], { type: 'text/plain' });
-
             const pct = Math.round(((i + 1) / totalChunks) * 100);
             bar.style.width = pct + '%';
             status.innerText = `Sende Paket ${i+1}/${totalChunks}...`;
 
-            console.log(`[UPLOAD] Sende Part ${i+1}/${totalChunks} (${fileBlob.size} bytes)`);
-
-            const res = await fetch(`https://ntfy.sh/${ch.topic}`, {
+            // WICHTIG: application/octet-stream zwingt ntfy, es als Anhang zu behandeln
+            // WICHTIG 2: Delay erhöht, damit der Server nicht blockt
+            await fetch(`https://ntfy.sh/${ch.topic}`, {
                 method: 'PUT',
-                body: fileBlob, // Blob statt String!
+                body: chunkData,
                 headers: {
-                    'Filename': `${backupID}_part_${i}`, // Dateiname setzen
+                    'Filename': `${backupID}_part_${i}`,
                     'Title': `Part ${i+1}/${totalChunks}`,
-                    'Priority': 'default'
-                    // KEIN 'Attach' Header hier, body ist die Datei!
+                    'Content-Type': 'application/octet-stream', 
+                    'Priority': 'default',
+                    'Attach': `${backupID}_part_${i}` // Expliziter Anhang-Befehl
+                }
+            }).then(async res => {
+                if(!res.ok) {
+                    const txt = await res.text();
+                    throw new Error(`Server Fehler bei Part ${i+1}: ${res.status} ${txt}`);
                 }
             });
 
-            if (!res.ok) {
-                const errTxt = await res.text();
-                throw new Error(`Server Fehler (${res.status}): ${errTxt}`);
-            }
-
-            // === RATE LIMIT SCHUTZ ===
-            // 2.5 Sekunden Pause zwischen großen Dateien
-            await new Promise(r => setTimeout(r, 2500)); 
+            // Sicherheits-Pause gegen Rate-Limiting (1 Sekunde)
+            await new Promise(r => setTimeout(r, 1000)); 
         }
 
         document.getElementById('syncTitle').innerText = "Fertig! ✅";
         status.innerText = isEncrypted ? "🔒 Sicher hochgeladen." : "Hochgeladen.";
-        
-        // Kurzer Sound für Erfolg
-        if(typeof playSound === 'function') playSound('pop');
-        
         setTimeout(() => { modal.style.display = 'none'; isSyncing = false; }, 1500);
 
     } catch (e) {
         console.error(e);
-        if(!abortSyncFlag) alert("Upload Fehler: " + e.message + "\n(Vielleicht Limit erreicht? Warte kurz.)");
+        if(!abortSyncFlag) alert("Upload Fehler: " + e.message);
         document.getElementById('syncProgressModal').style.display = 'none';
         isSyncing = false;
     }

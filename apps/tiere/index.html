@@ -12725,47 +12725,54 @@ async function startCloudPush() {
         document.getElementById('syncTitle').innerText = "Hochladen...";
         bar.style.width = "1%";
 
-        // 1. JSON holen
+        // 1. JSON holen & Packen
         status.innerText = "Packe Daten...";
         await new Promise(r => setTimeout(r, 100));
         let payloadString = await getFullBackupString(true); 
         
-        // --- NEU: VERSCHLÜSSELUNG ---
+        // --- VERSCHLÜSSELUNG ---
         let isEncrypted = false;
         if(ch.password) {
             status.innerText = "🔒 Verschlüssele Daten...";
-            await new Promise(r => setTimeout(r, 100)); // UI Update erlauben
+            await new Promise(r => setTimeout(r, 100)); 
             payloadString = await encryptText(payloadString, ch.password);
             isEncrypted = true;
         }
-        // -----------------------------
 
-        // 2. Chunking
-        const CHUNK_SIZE = 1.4 * 1024 * 1024; // Etwas kleiner wegen Base64 Overhead
+        // 2. Chunking (Sicherheitshalber auf 1 MB reduziert)
+        const CHUNK_SIZE = 1.0 * 1024 * 1024; 
         const totalChunks = Math.ceil(payloadString.length / CHUNK_SIZE);
         const backupID = 'bkp_' + Date.now(); 
         
-        // 3. Header senden
+        console.log(`[UPLOAD] Starte Upload. Größe: ${payloadString.length}, Chunks: ${totalChunks}`);
+
+        // 3. Header senden (Das ist eine normale Nachricht)
         const headerPayload = {
             type: 'tier_sync_header',
             id: backupID,
             chunks: totalChunks,
             size: payloadString.length,
             date: Date.now(),
-            device: navigator.platform,
+            device: navigator.platform || 'Browser',
             name: ch.name,
-            encrypted: isEncrypted // Flag setzen!
+            encrypted: isEncrypted
         };
         
-        await fetch(`https://ntfy.sh/${ch.topic}`, {
+        const headRes = await fetch(`https://ntfy.sh/${ch.topic}`, {
             method: 'PUT', 
             body: JSON.stringify(headerPayload),
-            headers: { 'Title': 'TierTicker Sync Header', 'Priority': 'high', 'Content-Type': 'text/plain' }
+            headers: { 
+                'Title': 'TierTicker Sync Header', 
+                'Priority': 'high', 
+                'Content-Type': 'text/plain' 
+            }
         });
 
-        // 4. Chunks senden
+        if(!headRes.ok) throw new Error("Header konnte nicht gesendet werden (Rate Limit?)");
+
+        // 4. Chunks senden (Als DATEIEN markiert!)
         for (let i = 0; i < totalChunks; i++) {
-            if(abortSyncFlag) throw new Error("Abbruch");
+            if(abortSyncFlag) throw new Error("Abbruch durch User");
 
             const start = i * CHUNK_SIZE;
             const end = start + CHUNK_SIZE;
@@ -12775,17 +12782,27 @@ async function startCloudPush() {
             bar.style.width = pct + '%';
             status.innerText = `Sende Paket ${i+1}/${totalChunks}...`;
 
+            // WICHTIG: application/octet-stream zwingt ntfy, es als Anhang zu behandeln
+            // WICHTIG 2: Delay erhöht, damit der Server nicht blockt
             await fetch(`https://ntfy.sh/${ch.topic}`, {
                 method: 'PUT',
                 body: chunkData,
                 headers: {
                     'Filename': `${backupID}_part_${i}`,
                     'Title': `Part ${i+1}/${totalChunks}`,
-                    'Content-Type': 'text/plain' 
+                    'Content-Type': 'application/octet-stream', 
+                    'Priority': 'default',
+                    'Attach': `${backupID}_part_${i}` // Expliziter Anhang-Befehl
+                }
+            }).then(async res => {
+                if(!res.ok) {
+                    const txt = await res.text();
+                    throw new Error(`Server Fehler bei Part ${i+1}: ${res.status} ${txt}`);
                 }
             });
 
-            await new Promise(r => setTimeout(r, 800)); 
+            // Sicherheits-Pause gegen Rate-Limiting (1 Sekunde)
+            await new Promise(r => setTimeout(r, 1000)); 
         }
 
         document.getElementById('syncTitle').innerText = "Fertig! ✅";
@@ -12799,7 +12816,6 @@ async function startCloudPush() {
         isSyncing = false;
     }
 }
-
 // --- CHECK & DOWNLOAD PROCESS ---
 
 

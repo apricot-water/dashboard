@@ -12706,6 +12706,7 @@ async function getFullBackupString(forCloud = false) {
 
 // --- UPLOAD PROCESS ---
 
+
 async function startCloudPush() {
     const ch = syncChannels.find(c => c.id === activeSyncId);
     if(!ch) return alert("Kein Kanal gewählt!");
@@ -12739,14 +12740,15 @@ async function startCloudPush() {
             isEncrypted = true;
         }
 
-        // 2. Chunking (Reduziert auf 0.5 MB gegen Error 413)
-        const CHUNK_SIZE = 0.5 * 1024 * 1024; // 512 KB
+        // 2. Chunking: 0.5 MB (512 KB)
+        // Das ist sicher unter dem 2 MB Limit für Attachments bei ntfy.sh
+        const CHUNK_SIZE = 0.5 * 1024 * 1024; 
         const totalChunks = Math.ceil(payloadString.length / CHUNK_SIZE);
         const backupID = 'bkp_' + Date.now(); 
         
         console.log(`[UPLOAD] Starte Upload. Größe: ${payloadString.length}, Chunks: ${totalChunks}`);
 
-        // 3. Header senden (Normale Nachricht, kein Anhang)
+        // 3. Header senden (Kleine Text-Nachricht, passt in 4KB Limit)
         const headerPayload = {
             type: 'tier_sync_header',
             id: backupID,
@@ -12759,7 +12761,7 @@ async function startCloudPush() {
         };
         
         const headRes = await fetch(`https://ntfy.sh/${ch.topic}`, {
-            method: 'POST', // POST ist besser für JSON Bodies ohne Anhang
+            method: 'POST', 
             body: JSON.stringify(headerPayload),
             headers: { 
                 'Title': 'TierTicker Sync Header', 
@@ -12770,7 +12772,7 @@ async function startCloudPush() {
 
         if(!headRes.ok) throw new Error("Header konnte nicht gesendet werden.");
 
-        // 4. Chunks senden
+        // 4. Chunks senden (Als DATEIEN/ANHÄNGE markiert)
         for (let i = 0; i < totalChunks; i++) {
             if(abortSyncFlag) throw new Error("Abbruch durch User");
 
@@ -12782,26 +12784,26 @@ async function startCloudPush() {
             bar.style.width = pct + '%';
             status.innerText = `Sende Paket ${i+1}/${totalChunks}...`;
 
-            // FIX: 'Attach' Header entfernt, Content-Type ist text/plain
+            // FIX: 'application/octet-stream' zwingt ntfy, es als Anhang zu behandeln (2MB Limit)
+            // statt als Textnachricht (4KB Limit).
             await fetch(`https://ntfy.sh/${ch.topic}`, {
                 method: 'PUT',
                 body: chunkData,
                 headers: {
-                    'Filename': `${backupID}_part_${i}`, // Das markiert es als Datei für ntfy
+                    'Filename': `${backupID}_part_${i}`, // Wichtig: Macht es zum Anhang
                     'Title': `Part ${i+1}/${totalChunks}`,
-                    'Content-Type': 'text/plain; charset=utf-8', 
+                    'Content-Type': 'application/octet-stream', // WICHTIGSTER FIX GEGEN ERROR 413
                     'Priority': 'default'
                 }
             }).then(async res => {
                 if(!res.ok) {
                     const txt = await res.text();
-                    // Fehler abfangen (z.B. 413 oder 429)
                     throw new Error(`Server Fehler bei Part ${i+1}: ${res.status} ${txt}`);
                 }
             });
 
-            // Sicherheits-Pause gegen Rate-Limiting (bleibt bei 1s)
-            await new Promise(r => setTimeout(r, 1000)); 
+            // Sicherheits-Pause
+            await new Promise(r => setTimeout(r, 1500)); 
         }
 
         document.getElementById('syncTitle').innerText = "Fertig! ✅";

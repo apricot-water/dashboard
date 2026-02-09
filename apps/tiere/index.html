@@ -12739,8 +12739,8 @@ async function startCloudPush() {
             isEncrypted = true;
         }
 
-        // 2. Chunking (1 MB Limit für Sicherheit)
-        const CHUNK_SIZE = 1.0 * 1024 * 1024; 
+        // 2. Chunking (Reduziert auf 0.5 MB gegen Error 413)
+        const CHUNK_SIZE = 0.5 * 1024 * 1024; // 512 KB
         const totalChunks = Math.ceil(payloadString.length / CHUNK_SIZE);
         const backupID = 'bkp_' + Date.now(); 
         
@@ -12759,7 +12759,7 @@ async function startCloudPush() {
         };
         
         const headRes = await fetch(`https://ntfy.sh/${ch.topic}`, {
-            method: 'POST', 
+            method: 'POST', // POST ist besser für JSON Bodies ohne Anhang
             body: JSON.stringify(headerPayload),
             headers: { 
                 'Title': 'TierTicker Sync Header', 
@@ -12770,7 +12770,7 @@ async function startCloudPush() {
 
         if(!headRes.ok) throw new Error("Header konnte nicht gesendet werden.");
 
-        // 4. Chunks senden (Als DATEIEN markiert über Filename Header)
+        // 4. Chunks senden
         for (let i = 0; i < totalChunks; i++) {
             if(abortSyncFlag) throw new Error("Abbruch durch User");
 
@@ -12782,24 +12782,25 @@ async function startCloudPush() {
             bar.style.width = pct + '%';
             status.innerText = `Sende Paket ${i+1}/${totalChunks}...`;
 
-            // FIX: 'Attach' entfernt, Content-Type angepasst
+            // FIX: 'Attach' Header entfernt, Content-Type ist text/plain
             await fetch(`https://ntfy.sh/${ch.topic}`, {
                 method: 'PUT',
                 body: chunkData,
                 headers: {
-                    'Filename': `${backupID}_part_${i}`, // Das macht es zum Anhang
+                    'Filename': `${backupID}_part_${i}`, // Das markiert es als Datei für ntfy
                     'Title': `Part ${i+1}/${totalChunks}`,
-                    'Content-Type': 'text/plain; charset=utf-8', // Text ist sicherer für Base64
+                    'Content-Type': 'text/plain; charset=utf-8', 
                     'Priority': 'default'
                 }
             }).then(async res => {
                 if(!res.ok) {
                     const txt = await res.text();
+                    // Fehler abfangen (z.B. 413 oder 429)
                     throw new Error(`Server Fehler bei Part ${i+1}: ${res.status} ${txt}`);
                 }
             });
 
-            // Sicherheits-Pause gegen Rate-Limiting (wichtig!)
+            // Sicherheits-Pause gegen Rate-Limiting (bleibt bei 1s)
             await new Promise(r => setTimeout(r, 1000)); 
         }
 
@@ -12814,6 +12815,7 @@ async function startCloudPush() {
         isSyncing = false;
     }
 }
+
 
 // --- CHECK & DOWNLOAD PROCESS ---
 
